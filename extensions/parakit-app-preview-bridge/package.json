@@ -1,0 +1,35 @@
+{
+  "name": "parakit-app-preview-bridge",
+  "displayName": "Parakit App Preview Bridge",
+  "description": "Provides the Parakit App Preview MCP bridge for Claude Code.",
+  "version": "0.0.1",
+  "publisher": "parakit",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.5.0"
+  },
+  "extensionKind": [
+    "ui"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension",
+  "scripts": {
+    "compile": "gulp compile-extension:parakit-app-preview-bridge",
+    "watch": "gulp watch-extension:parakit-app-preview-bridge"
+  },
+  "capabilities": {
+    "virtualWorkspaces": true,
+    "untrustedWorkspaces": {
+      "supported": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "24.x"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/microsoft/vscode.git"
+  }
+}

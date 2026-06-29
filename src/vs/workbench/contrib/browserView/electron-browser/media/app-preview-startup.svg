@@ -1,0 +1,432 @@
+<svg width="91" height="159" viewBox="0 0 91 159" fill="none" xmlns="http://www.w3.org/2000/svg">
+<style>
+svg { overflow: visible; }
+@keyframes kf_Ellipse_1_transform_0 {
+  0% {
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(0) scaleY(0) translate(-4.118px, -4.118px);
+  }
+  12.84% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(0) scaleY(0) translate(-4.118px, -4.118px);
+  }
+  16.45% {
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(1) scaleY(1) translate(-4.118px, -4.118px);
+  }
+  76.52% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(1) scaleY(1) translate(-4.118px, -4.118px);
+  }
+  81.09% {
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(0) scaleY(0) translate(-4.118px, -4.118px);
+  }
+  100% {
+    transform: translateX(57.647px) translateY(16.471px) translate(4.118px, 4.118px) scaleX(0) scaleY(0) translate(-4.118px, -4.118px);
+  }
+}
+#Ellipse_1 {
+  transform-origin: 0 0;
+  animation: kf_Ellipse_1_transform_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_1_sub0_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 7px;
+  }
+  85.3% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 7px;
+  }
+  91.43% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  91.49% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  99.59% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_1_sub0_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  2.637% {
+    animation-timing-function: linear;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  35.605% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  45.496% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    animation-timing-function: cubic-bezier(0.76, 0, 0.24, 1);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  87.472% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+}
+#Vector_1_sub0 {
+  animation:
+    kf_Vector_1_sub0_border-width_0 3.03326s linear infinite,
+    kf_Vector_1_sub0_path-trim_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_1_sub1_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 7px;
+  }
+  85.3% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 7px;
+  }
+  91.43% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_1_sub1_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  4.418% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  4.615% {
+    animation-timing-function: linear;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  37.583% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  47.474% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  56.606% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    animation-timing-function: cubic-bezier(0.76, 0, 0.24, 1);
+    stroke-dasharray: 0.9709 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  89.45% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+}
+#Vector_1_sub1 {
+  animation:
+    kf_Vector_1_sub1_border-width_0 3.03326s linear infinite,
+    kf_Vector_1_sub1_path-trim_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_2_sub2_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 7px;
+  }
+  95.45% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 7px;
+  }
+  99.59% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_2_sub2_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  6.594% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  26.326% {
+    animation-timing-function: cubic-bezier(0.52, 0, 0.731, 0.553);
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  39.561% {
+    animation-timing-function: cubic-bezier(0.245, 0.543, 0.527, 1);
+    stroke-dasharray: 0.6412 1;
+    stroke-dashoffset: -0.3588;
+    visibility: visible;
+  }
+  49.452% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  81.089% {
+    animation-timing-function: cubic-bezier(0.026, 0.289, 0.5, 1);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  95.383% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+}
+#Vector_2_sub2 {
+  animation:
+    kf_Vector_2_sub2_border-width_0 3.03326s linear infinite,
+    kf_Vector_2_sub2_path-trim_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_2_sub3_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 7px;
+  }
+  84.39% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 7px;
+  }
+  89.45% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_2_sub3_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  8.572% {
+    animation-timing-function: linear;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  41.539% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  51.43% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    animation-timing-function: cubic-bezier(0.151, -0.013, 1, 0.466);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  81.089% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+}
+#Vector_2_sub3 {
+  animation:
+    kf_Vector_2_sub3_border-width_0 3.03326s linear infinite,
+    kf_Vector_2_sub3_path-trim_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_2_sub4_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 7px;
+  }
+  87.56% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 7px;
+  }
+  89.45% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_2_sub4_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  10.715% {
+    animation-timing-function: linear;
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: 0;
+    visibility: hidden;
+  }
+  51.43% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  53.408% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    animation-timing-function: cubic-bezier(0.76, 0, 0.24, 1);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  95.574% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+}
+#Vector_2_sub4 {
+  animation:
+    kf_Vector_2_sub4_border-width_0 3.03326s linear infinite,
+    kf_Vector_2_sub4_path-trim_0 3.03326s linear infinite;
+}
+@keyframes kf_Vector_3_sub5_border-width_0 {
+  0% {
+    animation-timing-function: linear;
+    stroke-width: 6px;
+  }
+  84.39% {
+    animation-timing-function: cubic-bezier(0.5, 0, 0.5, 1);
+    stroke-width: 6px;
+  }
+  87.92% {
+    animation-timing-function: linear;
+    stroke-width: 0px;
+  }
+  100% {
+    stroke-width: 0px;
+  }
+}
+@keyframes kf_Vector_3_sub5_path-trim_0 {
+  0% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  19.154% {
+    animation-timing-function: cubic-bezier(0.017, 0.996, 0.5, 1);
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  29.968% {
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  61.155% {
+    animation-timing-function: cubic-bezier(0.76, 0, 0.24, 1);
+    stroke-dasharray: 1 1;
+    stroke-dashoffset: 0;
+    visibility: visible;
+  }
+  97.363% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+  100% {
+    stroke-dasharray: 0 1;
+    stroke-dashoffset: -1;
+    visibility: hidden;
+  }
+}
+#Vector_3_sub5 {
+  animation:
+    kf_Vector_3_sub5_border-width_0 3.03326s linear infinite,
+    kf_Vector_3_sub5_path-trim_0 3.03326s linear infinite;
+}
+</style>
+<g id="parakit_animation_white">
+<circle id="Ellipse_1" transform="translate(57.6471 16.4706)" cx="4.11765" cy="4.11765" r="3.70588" fill="white" stroke="white" stroke-width="0.823529"/>
+<path id="Vector_1_sub0" transform="translate(14.8235 38.2693)" d="M0 51.4954C0 44.0836 3.29412 -1.2105 27.1765 0.0247976" pathLength="1" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0.9242 1"/>
+<path id="Vector_1_sub1" transform="translate(-7.62939e-06 41.5882)" d="M0 70.4118C0 58.0588 46.7142 51.7582 55.1765 20.1765C57.4934 11.5294 56.4118 6.58824 51.0588 0" pathLength="1" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0.5104 1"/>
+<path id="Vector_2_sub2" transform="translate(6.17647 98.2106)" d="M6.17647 16.26C6.17647 26.8847 2.16063 38.0448 0.605214 49.0928C0.0290417 53.1853 3.82813 55.8933 6.58616 52.8154C16.9533 41.2458 23.4418 9.96387 40.9753 0" pathLength="1" visibility="hidden" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 1"/>
+<path id="Vector_2_sub3" transform="translate(47.1518 95.1177)" d="M36.8482 5.76471C36.8482 5.76471 29.4364 0 11.7305 0C7.31825 0 3.44583 1.13481 0 3.09298" pathLength="1" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0.0303 1"/>
+<path id="Vector_2_sub4" transform="translate(29.2353 5.791e-06)" d="M0 42.8235C2.19608 41.8627 6.17647 37.4706 6.17647 27.5882C6.17647 15.2353 13.5882 0 30.8824 0C48.1765 0 52.7059 15.2353 52.7059 21C52.7059 22.8572 53.8808 22.4731 53.5294 25.1176C53.1196 28.2019 51.4062 33.2672 48.4208 36.726C46.9437 38.4372 45.6882 40.5016 46.1427 42.716C46.6307 45.0929 47.3529 47.5931 47.3529 50.6471C47.3529 56.2139 44.665 72.9164 28.9066 87.1073C28.0703 87.8604 28.1554 89.2469 28.9748 90.0184C31.1722 92.0871 33.7647 95.8207 33.7647 100.882C33.7647 107.471 27.5882 107.471 27.1765 107.471C20.5882 107.471 17.9165 98.2106 17.9165 98.2106" pathLength="1" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0.2695 1"/>
+<path id="Vector_3_sub5" transform="translate(72.4706 20.8793)" d="M9.47059 0.120705C6.31373 -0.29106 0 0.120705 0 5.06188C0 10.0031 3.43137 13.9835 5.35294 15.356C7.25529 16.7148 12.5207 0.854634 9.56275 0.13776" pathLength="1" visibility="hidden" stroke="white" stroke-width="7" stroke-linecap="round" stroke-dasharray="0 1"/>
+</g>
+</svg>

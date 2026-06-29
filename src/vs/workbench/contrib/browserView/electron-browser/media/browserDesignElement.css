@@ -1,0 +1,191 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+.browser-design-element-view {
+	box-sizing: border-box;
+	height: 100%;
+	overflow: auto;
+	color: var(--vscode-foreground);
+	font-size: 12px;
+	line-height: 17px;
+}
+
+.browser-design-element-empty {
+	color: var(--vscode-descriptionForeground);
+	padding: 12px;
+}
+
+.browser-design-element-header {
+	position: sticky;
+	top: 0;
+	z-index: 1;
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 10px 12px;
+	background: var(--vscode-sideBar-background);
+}
+
+.browser-design-element-header-text {
+	min-width: 0;
+	flex: 1;
+}
+
+.browser-design-element-title {
+	font-weight: 600;
+	line-height: 18px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-design-element-url {
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	line-height: 15px;
+	margin-top: 2px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-design-element-actions {
+	display: flex;
+	gap: 6px;
+	flex-shrink: 0;
+}
+
+.browser-design-element-button {
+	border: 0;
+	border-radius: 2px;
+	box-sizing: border-box;
+	cursor: pointer;
+	font-size: 11px;
+	height: 24px;
+	line-height: 24px;
+	padding: 0 8px;
+	white-space: nowrap;
+}
+
+.browser-design-element-primary {
+	background: var(--vscode-button-background);
+	color: var(--vscode-button-foreground);
+}
+
+.browser-design-element-primary:hover {
+	background: var(--vscode-button-hoverBackground);
+}
+
+.browser-design-element-secondary {
+	background: var(--vscode-button-secondaryBackground);
+	color: var(--vscode-button-secondaryForeground);
+}
+
+.browser-design-element-secondary:hover {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.browser-design-element-section-title {
+	padding: 18px 12px 7px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 11px;
+	font-weight: 600;
+	line-height: 16px;
+	text-transform: uppercase;
+}
+
+.browser-design-element-summary,
+.browser-design-element-properties {
+	margin: 0 12px;
+}
+
+.browser-design-element-row,
+.browser-design-element-property {
+	display: grid;
+	grid-template-columns: minmax(82px, 34%) minmax(0, 1fr);
+	gap: 8px;
+	padding: 4px 0;
+}
+
+.browser-design-element-row-block {
+	align-items: start;
+}
+
+.browser-design-element-label,
+.browser-design-element-property-name {
+	color: var(--vscode-descriptionForeground);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-design-element-value,
+.browser-design-element-property-value {
+	min-width: 0;
+	font-family: var(--monaco-monospace-font);
+	font-size: 11px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-design-element-breadcrumbs {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	overflow: hidden;
+}
+
+.browser-design-element-breadcrumb {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-design-element-breadcrumb-separator {
+	color: var(--vscode-descriptionForeground);
+	flex-shrink: 0;
+}
+
+.browser-design-element-token {
+	display: inline-block;
+	margin-right: 6px;
+	color: var(--vscode-symbolIcon-variableForeground);
+	font-weight: 600;
+}
+
+.browser-design-element-raw-value {
+	color: var(--vscode-descriptionForeground);
+}
+
+.browser-design-element-inline-details summary,
+.browser-design-element-raw summary {
+	cursor: pointer;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+	line-height: 18px;
+}
+
+.browser-design-element-inline-details pre,
+.browser-design-element-raw pre {
+	box-sizing: border-box;
+	max-height: 180px;
+	margin: 6px 0 0;
+	overflow: auto;
+	padding: 8px;
+	border-radius: 4px;
+	background: var(--vscode-textCodeBlock-background);
+	font-family: var(--monaco-monospace-font);
+	font-size: 11px;
+	line-height: 16px;
+	white-space: pre-wrap;
+	word-break: break-word;
+}
+
+.browser-design-element-raw {
+	margin: 0 12px 12px;
+	padding: 4px 0;
+}

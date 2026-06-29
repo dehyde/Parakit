@@ -1,0 +1,74 @@
+.claude-code-sidebar-webview-container {
+	position: relative;
+}
+
+.claude-code-sidebar-loading {
+	position: absolute;
+	inset: 0;
+	z-index: 1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	padding: 24px;
+	color: var(--vscode-sideBar-foreground);
+	background: transparent;
+	opacity: 1;
+	transition: opacity 160ms ease-out, visibility 160ms ease-out;
+	pointer-events: none;
+}
+
+.claude-code-sidebar-loading-hidden {
+	visibility: hidden;
+	opacity: 0;
+}
+
+.claude-code-sidebar-loading-mark {
+	position: relative;
+	width: 18px;
+	height: 18px;
+}
+
+.claude-code-sidebar-loading-ring {
+	position: absolute;
+	inset: 0;
+	border-radius: 50%;
+	border: 1.5px solid color-mix(in srgb, var(--vscode-sideBar-foreground) 18%, transparent);
+	border-top-color: color-mix(in srgb, var(--vscode-sideBar-foreground) 72%, transparent);
+	animation: claude-code-sidebar-loading-spin 1100ms linear infinite;
+}
+
+.claude-code-sidebar-loading-mark::after {
+	display: none;
+}
+
+.claude-code-sidebar-loading-label {
+	margin-top: 2px;
+	color: var(--vscode-descriptionForeground);
+	font-weight: 500;
+	font-size: 12px;
+	line-height: 16px;
+}
+
+.claude-code-sidebar-loading-detail {
+	display: none;
+}
+
+.claude-code-sidebar-loading-dots {
+	display: none;
+}
+
+@keyframes claude-code-sidebar-loading-spin {
+	to {
+		transform: rotate(360deg);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.claude-code-sidebar-loading,
+	.claude-code-sidebar-loading-ring {
+		animation: none;
+		transition: none;
+	}
+}

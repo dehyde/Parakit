@@ -1,0 +1,1233 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+@property --animation-angle {
+	syntax: '<angle>';
+	inherits: false;
+	initial-value: 135deg;
+}
+
+@property --animation-opacity {
+	syntax: '<percentage>';
+	inherits: false;
+	initial-value: 0%;
+}
+
+@keyframes browser-shared-border-spin {
+	from {
+		--animation-angle: 135deg;
+	}
+	to {
+		--animation-angle: 495deg;
+	}
+}
+
+.browser-root {
+	display: flex;
+	flex-direction: column;
+	width: 100%;
+	height: 100%;
+	outline: none !important;
+
+	.browser-navbar {
+		display: flex;
+		align-items: center;
+		padding: 6px 8px 3px 8px;
+		background-color: var(--vscode-editor-background);
+		flex-shrink: 0;
+		gap: 8px;
+	}
+
+	.browser-nav-toolbar,
+	.browser-actions-toolbar {
+		display: flex;
+		align-items: center;
+		flex-shrink: 0;
+
+		.actions-container {
+			gap: 4px;
+		}
+	}
+
+	.browser-actions-toolbar {
+		margin-right: 4px;
+	}
+
+	.browser-url-container {
+		flex: 1;
+		display: flex;
+		align-items: stretch;
+		box-sizing: border-box;
+		min-width: 0;
+		background-color: var(--vscode-input-background);
+		border: 1px solid var(--vscode-input-border);
+		border-radius: var(--vscode-cornerRadius-medium);
+
+		&:has(.browser-url-display:focus) {
+			border-color: var(--vscode-focusBorder);
+		}
+	}
+
+	.browser-pre-url-widgets {
+		display: flex;
+		flex-shrink: 0;
+	}
+
+	.browser-remote-indicator {
+		display: flex;
+		align-items: center;
+		gap: 4px;
+		padding: 2px 5px;
+		font-size: 12px;
+		white-space: nowrap;
+		background-color: var(--vscode-editorWidget-background);
+		color: var(--vscode-disabledForeground);
+		border-radius: var(--vscode-cornerRadius-small) 0 0 var(--vscode-cornerRadius-small);
+
+		&.connected {
+			background-color: var(--vscode-statusBarItem-remoteBackground);
+			color: var(--vscode-statusBarItem-remoteForeground);
+		}
+
+		&.warning {
+			background-color: var(--vscode-statusBarItem-warningBackground);
+			color: var(--vscode-statusBarItem-warningForeground);
+		}
+
+		.codicon {
+			color: inherit;
+		}
+	}
+
+	.browser-url-bar-widgets {
+		display: flex;
+		align-items: center;
+		flex-shrink: 1;
+		overflow: hidden;
+		padding: 2px;
+		gap: 2px;
+	}
+
+	.browser-zoom-pill {
+		display: none;
+		align-items: center;
+		gap: 2px;
+		margin: 0;
+		padding: 0 2px;
+		flex-shrink: 0;
+		border-radius: var(--vscode-cornerRadius-small);
+		color: var(--vscode-descriptionForeground);
+		font-size: 13px;
+		line-height: 1;
+		white-space: nowrap;
+		pointer-events: none;
+
+		&.visible {
+			display: flex;
+		}
+
+		.codicon {
+			font-size: 14px;
+		}
+	}
+
+	.browser-emulation-toolbar {
+		flex-shrink: 0;
+		display: flex;
+		align-items: flex-start;
+		gap: 8px;
+		padding: 4px 8px;
+		font-size: 12px;
+		background-color: var(--vscode-editorWidget-background);
+		color: var(--vscode-editorWidget-foreground);
+
+		.browser-emulation-toolbar-groups {
+			display: flex;
+			align-items: center;
+			flex-flow: row wrap;
+			gap: 4px;
+		}
+
+		.monaco-select-box {
+			height: 22px;
+			padding: 0 22px 0 6px;
+			font-size: inherit;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+
+		.monaco-inputbox > .ibwrapper > input {
+			font-size: inherit;
+		}
+
+		.browser-emulation-toolbar-group {
+			display: flex;
+			align-items: center;
+			gap: 4px;
+			flex-shrink: 0;
+		}
+
+		.browser-emulation-toolbar-preset { min-width: 150px; max-width: 220px; }
+		.browser-emulation-toolbar-zoom { min-width: 78px; }
+
+		.browser-emulation-toolbar-label {
+			opacity: 0.8;
+			user-select: none;
+			white-space: nowrap;
+		}
+
+		.browser-emulation-toolbar-input {
+			.monaco-inputbox {
+				height: 22px;
+
+				> .ibwrapper > input {
+					text-align: center;
+					padding: 0 4px;
+
+					/* Hide the spinner buttons that some browsers render for number inputs. */
+					&::-webkit-inner-spin-button,
+					&::-webkit-outer-spin-button {
+						appearance: none;
+						margin: 0;
+					}
+				}
+			}
+		}
+
+		.browser-emulation-toolbar-dimensions .browser-emulation-toolbar-input { width: 56px; }
+		.browser-emulation-toolbar-dpr .browser-emulation-toolbar-input { width: 44px; }
+
+		.browser-emulation-toolbar-spacer {
+			flex: 1;
+		}
+
+		.browser-emulation-toolbar-actions {
+			display: flex;
+			align-items: center;
+			flex-shrink: 0;
+
+			.actions-container { gap: 2px; }
+		}
+	}
+
+	.browser-link-opened-hint-pill {
+		display: none;
+		align-items: center;
+		gap: 4px;
+		margin: 0;
+		padding: 3px 4px;
+		flex-shrink: 0;
+		border-radius: 9999px;
+		border: 1px solid var(--vscode-button-secondaryBorder, transparent);
+		background-color: var(--vscode-button-secondaryBackground);
+		color: var(--vscode-button-secondaryForeground);
+		font-size: 12px;
+		line-height: 1;
+		white-space: nowrap;
+		cursor: pointer;
+		overflow: hidden;
+		max-width: 14px;
+		transition: max-width 0.3s ease, padding 0.3s ease, background-color 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+		position: relative;
+
+		&.attention {
+			border-color: var(--vscode-button-border, transparent);
+			background-color: var(--vscode-button-background);
+			color: var(--vscode-button-foreground);
+			max-width: 200px;
+			padding: 3px 6px;
+
+			span {
+				opacity: 1;
+			}
+
+			&:hover {
+				background-color: var(--vscode-button-hoverBackground);
+			}
+		}
+
+		&.visible {
+			display: flex;
+		}
+
+		&:hover {
+			background-color: var(--vscode-button-secondaryHoverBackground);
+		}
+
+		&:focus-visible {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: 1px;
+		}
+
+		span {
+			opacity: 0;
+			transition: opacity 0.3s ease;
+		}
+
+		.codicon {
+			color: inherit;
+			font-size: 14px;
+			flex-shrink: 0;
+			opacity: 1;
+		}
+	}
+
+	.browser-favorite-indicator-container {
+		display: flex;
+		align-items: center;
+		margin: 0;
+		flex-shrink: 0;
+
+		.browser-favorite-indicator {
+			padding: 2px;
+			border-radius: var(--vscode-cornerRadius-small);
+			border-width: 0;
+			color: var(--vscode-descriptionForeground);
+			background-color: transparent;
+			outline: none !important;
+
+			&:focus-visible {
+				outline: 1px solid var(--vscode-focusBorder) !important;
+				outline-offset: 0px !important;
+			}
+
+			.codicon {
+				margin: 0;
+				font-size: 16px;
+			}
+
+			&:hover {
+				background-color: var(--vscode-toolbar-hoverBackground) !important;
+				color: var(--vscode-foreground);
+			}
+		}
+	}
+
+	.browser-share-toggle-container {
+		display: flex;
+		align-items: center;
+		margin: 0;
+		min-width: 0;
+		flex-shrink: 1;
+
+		.browser-share-toggle {
+			padding: 2px 4px;
+			border-radius: var(--vscode-cornerRadius-small);
+			border-width: 0;
+			color: var(--vscode-descriptionForeground);
+			white-space: nowrap;
+			gap: 4px;
+			outline: none !important;
+
+			> span:not(.codicon) {
+				min-width: 0;
+				overflow: hidden;
+				text-overflow: ellipsis;
+			}
+
+			&:focus-visible {
+				outline: 1px solid var(--vscode-focusBorder) !important;
+				outline-offset: 0px !important;
+			}
+
+			.codicon {
+				margin: 0;
+			}
+
+			&:hover {
+				background-color: var(--vscode-toolbar-hoverBackground) !important;
+				color: var(--vscode-foreground);
+			}
+
+			&.stop-ai-control {
+				flex-shrink: 0;
+				padding: 3px 8px;
+				background-color: var(--vscode-button-background) !important;
+				color: var(--vscode-button-foreground);
+				font-weight: 600;
+
+				&:hover {
+					background-color: var(--vscode-button-hoverBackground) !important;
+					color: var(--vscode-button-foreground);
+				}
+			}
+
+			&.checked {
+				background: linear-gradient(135deg in lab,
+					color-mix(in srgb, #51a2ff 25%, transparent),
+					color-mix(in srgb, #4af0c0 25%, transparent),
+					color-mix(in srgb, #b44aff 25%, transparent)
+				) !important;
+				color: var(--vscode-foreground);
+
+				&:hover {
+					background: linear-gradient(135deg in lab,
+						color-mix(in srgb, #51a2ff 35%, transparent),
+						color-mix(in srgb, #4af0c0 35%, transparent),
+						color-mix(in srgb, #b44aff 35%, transparent)
+					) !important;
+				}
+			}
+		}
+	}
+
+	.browser-element-selection-warning {
+		position: absolute;
+		z-index: 20;
+		top: 12px;
+		left: 50%;
+		max-width: min(560px, calc(100% - 32px));
+		padding: 6px 10px;
+		border: 1px solid var(--vscode-inputValidation-warningBorder);
+		border-radius: var(--vscode-cornerRadius-small);
+		color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground));
+		background: var(--vscode-inputValidation-warningBackground);
+		box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+		font-size: 12px;
+		line-height: 18px;
+		text-align: center;
+		transform: translateX(-50%);
+		pointer-events: none;
+	}
+
+	.browser-container-wrapper {
+		flex: 1 1 auto;
+		min-height: 0;
+		position: relative;
+		box-sizing: border-box;
+		overflow: hidden;
+	}
+
+	.browser-container {
+		overflow: visible;
+		border-radius: var(--vscode-cornerRadius-small);
+		/*  Absolutely positioned within the wrapper; size and position are set
+			inline from JS (already snapped to the physical-pixel grid) so the
+			WebContentsView placed by the main process and the placeholder
+			screenshot align on the same pixels. */
+		position: absolute;
+		outline: none !important;
+		z-index: 0; /* Important: creates a new stacking context for the gradient border trick */
+
+		&::before {
+			content: '';
+			position: absolute;
+			--animation-angle: 135deg;
+			--animation-opacity: 0%;
+			top: -1px;
+			left: -1px;
+			right: -1px;
+			bottom: -1px;
+			z-index: -2;
+			border-radius: calc(var(--vscode-cornerRadius-small) + 1px);
+			background: conic-gradient(from var(--animation-angle),
+				color-mix(in srgb, #b44aff var(--animation-opacity), var(--vscode-browser-border, transparent)),
+				color-mix(in srgb, #4af0c0 var(--animation-opacity), var(--vscode-browser-border, transparent)),
+				color-mix(in srgb, #51a2ff var(--animation-opacity), var(--vscode-browser-border, transparent)),
+				color-mix(in srgb, #4af0c0 var(--animation-opacity), var(--vscode-browser-border, transparent)),
+				color-mix(in srgb, #b44aff var(--animation-opacity), var(--vscode-browser-border, transparent))
+			);
+			pointer-events: none;
+		}
+
+		&.shared::before {
+			top: -2px;
+			left: -2px;
+			right: -2px;
+			bottom: -2px;
+			border-radius: calc(var(--vscode-cornerRadius-small) + 2px);
+			--animation-angle: 495deg;
+			--animation-opacity: 100%;
+		}
+
+		&.animate::before {
+			transition: top 350ms cubic-bezier(0.2, 0, 0, 1),
+				left 350ms cubic-bezier(0.2, 0, 0, 1),
+				right 350ms cubic-bezier(0.2, 0, 0, 1),
+				bottom 350ms cubic-bezier(0.2, 0, 0, 1),
+				border-radius 350ms cubic-bezier(0.2, 0, 0, 1),
+				--animation-opacity 350ms cubic-bezier(0.2, 0, 0, 1);
+		}
+
+		&.shared.animate::before {
+			animation: browser-shared-border-spin 1500ms cubic-bezier(0, 0.2, 0, 1) 1 forwards,
+				browser-shared-border-spin 45s linear 1500ms infinite;
+		}
+
+		&::after {
+			content: '';
+			position: absolute;
+			top: 1px;
+			left: 1px;
+			right: 1px;
+			bottom: 1px;
+			z-index: -1;
+			border-radius: var(--vscode-cornerRadius-small);
+			background-color: var(--vscode-editor-background);
+			pointer-events: none;
+		}
+	}
+
+	.browser-container > .monaco-sash {
+		--vscode-sash-size: 8px;
+		--vscode-sash-hover-size: 4px;
+
+		&:not(.disabled)::before {
+			border-radius: 2px;
+			background: var(--vscode-editorWidget-resizeBorder, var(--vscode-editorWidget-border));
+			transition: background-color 0.1s ease-out;
+		}
+
+		&.hover::before,
+		&.active::before {
+			background: var(--vscode-sash-hoverBorder);
+		}
+
+		/* SE corner drag handle indicator. */
+		& > .orthogonal-drag-handle {
+			box-sizing: border-box;
+			border-radius: 2px;
+
+			&.end {
+				cursor: nwse-resize !important;
+			}
+		}
+
+		&.horizontal > .orthogonal-drag-handle.end {
+			&::before {
+				content: '';
+				position: absolute;
+				color: var(--vscode-editorWidget-resizeBorder, var(--vscode-editorWidget-border));
+				left: 10px;
+				top: 2px;
+				width: 8px;
+				height: 8px;
+				background: repeating-linear-gradient(135deg, transparent 0px 4px, currentColor 4px 20px);
+				border-radius: 2px;
+				transition: color 0.1s ease-out;
+			}
+		}
+	}
+
+	.browser-container > .monaco-sash.vertical:is(.hover, .active) + .monaco-sash.horizontal:is(.hover, .active) > .orthogonal-drag-handle.end::before {
+		color: var(--vscode-sash-hoverBorder);
+	}
+
+	.browser-placeholder-contents {
+		width: 100%;
+		height: 100%;
+		position: relative;
+		overflow: hidden;
+		border-radius: var(--vscode-cornerRadius-small);
+	}
+
+	.browser-placeholder-screenshot {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		background-image: none;
+		background-size: cover;
+		background-repeat: no-repeat;
+	}
+
+	.browser-container--dragging .browser-placeholder-screenshot {
+		opacity: 0.9;
+		background-size: cover;
+		filter: blur(10px);
+	}
+
+	.browser-overlay-paused {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		pointer-events: none;
+		color: var(--vscode-foreground);
+		background-color: color-mix(in srgb, var(--vscode-editor-background) 15%, transparent);
+		opacity: 0;
+		visibility: hidden;
+		transition: opacity 200ms ease-in;
+
+		&.visible {
+			opacity: 1;
+			visibility: visible;
+		}
+
+		&.show-message {
+			background-color: color-mix(in srgb, var(--vscode-editor-background) 22%, transparent);
+		}
+	}
+
+	.browser-overlay-paused-message {
+		padding: 8px 12px;
+		border-radius: 4px;
+		border: 1px solid var(--vscode-editorWidget-border);
+		background-color: color-mix(in srgb, var(--vscode-editor-background) 92%, transparent);
+		box-shadow: var(--vscode-widget-shadow);
+		max-width: 360px;
+		text-align: left;
+		display: none;
+		opacity: 0.82;
+	}
+
+	.browser-overlay-paused.show-message .browser-overlay-paused-message {
+		display: block;
+	}
+
+	.browser-overlay-paused-heading {
+		font-size: 12px;
+		font-weight: 500;
+		margin-bottom: 2px;
+	}
+
+	.browser-overlay-paused-detail {
+		font-size: 11px;
+		color: var(--vscode-descriptionForeground);
+	}
+
+	.browser-error-container {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		display: flex;
+		align-items: flex-start;
+		justify-content: center;
+		padding: 80px 40px;
+		background-color: var(--vscode-editor-background);
+		overflow-y: auto;
+	}
+
+	.browser-error-content {
+		max-width: 520px;
+		width: 100%;
+		user-select: text;
+		-webkit-user-select: text;
+	}
+
+	.browser-error-title {
+		font-size: 18px;
+		font-weight: 600;
+		color: var(--vscode-errorForeground);
+		margin-bottom: 20px;
+	}
+
+	.browser-error-detail {
+		margin-bottom: 8px;
+		line-height: 20px;
+
+		strong {
+			font-weight: 600;
+		}
+
+		code {
+			background-color: var(--vscode-textCodeBlock-background);
+			padding: 1px 4px;
+			border-radius: 3px;
+			font-family: var(--monaco-monospace-font);
+			font-size: 12px;
+		}
+
+		&.hint {
+			color: var(--vscode-descriptionForeground);
+			font-style: italic;
+		}
+	}
+
+	.browser-find-widget-wrapper {
+		flex-shrink: 0;
+		position: relative;
+		z-index: 10;
+		overflow: hidden;
+
+		/* Override SimpleFindWidget absolute positioning to flow in layout */
+		.simple-find-part-wrapper {
+			position: relative;
+			top: 0;
+			right: 0;
+			padding: 0;
+			margin-left: auto;
+		}
+
+		.simple-find-part {
+			border-radius: 0;
+			border: none;
+			top: 0 !important;
+			padding: 4px 8px 4px 12px;
+			transition: none;
+			background: none !important;
+
+			&:not(.visible) {
+				display: none;
+			}
+
+			.monaco-sash {
+				width: 2px !important;
+				height: calc(100% - 4px);
+				margin-top: 2px;
+				border-radius: var(--vscode-cornerRadius-circle);
+
+				&::before {
+					width: var(--vscode-sash-hover-size);
+					left: calc(50% - (var(--vscode-sash-hover-size) / 2));
+					border-radius: var(--vscode-cornerRadius-circle);
+				}
+			}
+
+			/* Hide whole word and regex toggles */
+			.codicon-whole-word,
+			.codicon-regex {
+				display: none;
+			}
+			/* Adjust input width to account for fewer toggles */
+			.input {
+				width: calc(100% - 16px) !important;
+			}
+		}
+	}
+
+	.browser-welcome-container {
+		position: absolute;
+		top: 0;
+		left: 0;
+		right: 0;
+		bottom: 0;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		background-color: var(--vscode-editor-background);
+
+		.browser-welcome-content {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			padding: 12px;
+		}
+
+		.browser-welcome-icon {
+			min-height: 40px;
+
+			.codicon {
+				font-size: 40px;
+				margin-bottom: 24px;
+				color: var(--vscode-descriptionForeground);
+			}
+		}
+
+		.browser-welcome-title {
+			font-size: 13px;
+			font-weight: 600;
+			color: var(--vscode-foreground);
+			margin-top: 5px;
+			text-align: center;
+			line-height: normal;
+			padding: 0 8px;
+		}
+
+		.browser-welcome-subtitle {
+			font-size: 12px;
+			position: relative;
+			text-align: center;
+			max-width: 280px;
+			padding: 0 20px;
+			margin: 8px auto 0;
+			color: var(--vscode-descriptionForeground);
+
+			p {
+				margin-top: 8px;
+				margin-bottom: 8px;
+			}
+		}
+
+		.browser-welcome-configure-button {
+			margin-top: 14px;
+			padding: 4px 10px;
+			color: var(--vscode-button-foreground);
+			background-color: var(--vscode-button-background);
+			border: 0;
+			border-radius: var(--vscode-cornerRadius-small);
+			cursor: pointer;
+		}
+
+		.browser-welcome-configure-button:hover {
+			background-color: var(--vscode-button-hoverBackground);
+		}
+	}
+
+	/* Site info indicator in URL bar */
+	.browser-site-info-container {
+		display: flex;
+		align-items: center;
+		position: relative;
+		flex-shrink: 0;
+		margin: 1px 0 1px 1px;
+	}
+
+	.browser-site-info-indicator {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		width: 23px;
+		height: 23px;
+		border-radius: var(--vscode-cornerRadius-small);
+		cursor: pointer;
+		background-color: var(--vscode-statusBarItem-errorBackground);
+		outline: none !important;
+
+		&:focus-visible {
+			outline: 1px solid var(--vscode-focusBorder) !important;
+			outline-offset: -1px !important;
+		}
+
+		.codicon {
+			font-size: 15px;
+			margin: 0;
+			color: var(--vscode-statusBarItem-errorForeground);
+		}
+	}
+
+	.browser-url-display {
+		flex: 1;
+		min-width: 60px;
+		display: block;
+		box-sizing: border-box;
+		padding: 4px 6px;
+		font-size: 13px;
+		line-height: normal;
+		color: var(--vscode-input-foreground);
+		cursor: text;
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		outline: none !important;
+
+		&:focus-within {
+			text-overflow: clip;
+		}
+
+		&:empty::before {
+			content: attr(data-placeholder);
+			color: var(--vscode-input-placeholderForeground);
+			pointer-events: none;
+		}
+	}
+
+	.browser-url-display-protocol-bad {
+		color: var(--vscode-errorForeground);
+		text-decoration: line-through;
+	}
+
+	/* Certificate error page styles */
+	.browser-error-icon {
+		margin-bottom: 12px;
+
+		.codicon {
+			font-size: 32px;
+		}
+
+		&.cert-error .codicon {
+			color: var(--vscode-errorForeground);
+		}
+	}
+
+	.browser-cert-details-table {
+		margin-top: 16px;
+		padding: 8px 4px;
+		border: 1px solid var(--vscode-widget-border, var(--vscode-contrastBorder, transparent));
+		border-radius: var(--vscode-cornerRadius-medium);
+		background-color: var(--vscode-editorWidget-background);
+	}
+
+	.browser-cert-details-heading {
+		font-weight: 600;
+		margin-bottom: 8px;
+		padding: 0 8px;
+	}
+
+	.browser-cert-details-row {
+		display: grid;
+		grid-template-columns: 30% 70%;
+		gap: 4px;
+		padding: 3px 8px;
+		font-size: 12px;
+
+		&:nth-child(odd) {
+			background-color: rgba(130, 130, 130, 0.04);
+		}
+	}
+
+	.browser-cert-details-label {
+		color: var(--vscode-descriptionForeground);
+		white-space: nowrap;
+	}
+
+	.browser-cert-details-value {
+		word-break: break-all;
+		font-family: var(--monaco-monospace-font);
+	}
+
+	.browser-cert-action {
+		margin-top: 20px;
+		display: flex;
+		justify-content: flex-end;
+		flex-direction: row;
+		gap: 8px;
+
+		&.reverse {
+			flex-direction: row-reverse;
+			justify-content: flex-start;
+		}
+
+		.monaco-button {
+			width: fit-content;
+		}
+	}
+
+	/* Site info hover popover */
+	.browser-site-info-hover-content {
+		padding: 4px 8px;
+		width: 320px;
+		max-width: 320px;
+	}
+
+	.browser-site-info-hover-heading {
+		font-weight: 600;
+		color: var(--vscode-errorForeground);
+	}
+
+	.browser-site-info-hover-detail {
+		font-size: 12px;
+		line-height: 1.5;
+		margin-top: 8px;
+	}
+
+	.browser-site-info-hover-revoke {
+		display: inline-block;
+		font-size: 12px;
+		color: var(--vscode-textLink-foreground);
+		cursor: pointer;
+		text-decoration: var(--text-link-decoration);
+		margin-top: 8px;
+
+		&:hover {
+			color: var(--vscode-textLink-activeForeground);
+			text-decoration: underline;
+		}
+
+		&:focus-visible {
+			outline: 1px solid var(--vscode-focusBorder);
+			outline-offset: 2px;
+		}
+	}
+}
+
+.app-preview-settings-modal-block {
+	position: fixed;
+	inset: 0;
+	z-index: 2600;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: rgba(0, 0, 0, 0.62);
+	backdrop-filter: blur(2px);
+	font-family: var(--monaco-monospace-font, "IBM Plex Mono", monospace);
+	font-size: 13px;
+	line-height: 1.4;
+	letter-spacing: 0;
+}
+
+.app-preview-settings-modal {
+	width: min(560px, calc(100vw - 48px));
+	max-height: calc(100vh - 64px);
+	display: flex;
+	flex-direction: column;
+	box-sizing: border-box;
+	background: var(--vscode-quickInput-background, #252526);
+	color: var(--vscode-quickInput-foreground, #cccccc);
+	border: 1px solid var(--vscode-focusBorder);
+	box-shadow: 0 24px 72px rgba(0, 0, 0, 0.72);
+	border-radius: 8px;
+	overflow: hidden;
+	font-family: inherit;
+}
+
+.app-preview-settings-header {
+	padding: 16px 18px 12px;
+	background: var(--vscode-quickInput-background, #252526);
+	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.app-preview-settings-title {
+	font-size: 14px;
+	font-weight: 600;
+	line-height: 20px;
+	color: var(--vscode-foreground, #cccccc);
+}
+
+.app-preview-settings-branch {
+	display: inline-block;
+	margin-top: 6px;
+	padding: 2px 6px;
+	font-size: 12px;
+	line-height: 16px;
+	color: var(--vscode-descriptionForeground, #8f8f8f);
+	background: var(--vscode-badge-background, rgba(127, 127, 127, 0.18));
+	border-radius: 4px;
+	user-select: text;
+}
+
+.app-preview-settings-body {
+	padding: 16px 18px 10px;
+	overflow: auto;
+}
+
+.app-preview-settings-note,
+.app-preview-settings-copy,
+.app-preview-settings-secondary-value,
+.app-preview-settings-warning,
+.app-preview-settings-caption {
+	font-size: 12px;
+	line-height: 17px;
+	color: var(--vscode-descriptionForeground, var(--vscode-foreground));
+}
+
+.app-preview-settings-note {
+	padding: 8px 10px;
+	margin-bottom: 14px;
+	color: var(--vscode-editorWidget-foreground, #cccccc);
+	background: var(--vscode-input-background, rgba(127, 127, 127, 0.12));
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 6px;
+}
+
+.app-preview-settings-section-heading {
+	margin-bottom: 4px;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--vscode-foreground, #cccccc);
+}
+
+.app-preview-settings-copy {
+	margin-bottom: 8px;
+}
+
+.app-preview-settings-field {
+	margin-bottom: 10px;
+}
+
+.app-preview-settings-field label {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--vscode-foreground, #cccccc);
+}
+
+.app-preview-settings-url-input-wrap {
+	position: relative;
+	margin-top: 6px;
+}
+
+.app-preview-settings-field input[type='text'] {
+	width: 100%;
+	box-sizing: border-box;
+	height: 32px;
+	padding: 5px 8px;
+	font-family: inherit;
+	font-size: 12px;
+	line-height: 20px;
+	color: var(--vscode-input-foreground, #cccccc);
+	background: var(--vscode-input-background, #3c3c3c);
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 4px;
+	outline: none;
+}
+
+.app-preview-settings-url-input {
+	position: relative;
+	z-index: 1;
+	color: transparent !important;
+	caret-color: var(--vscode-input-foreground, #cccccc);
+	background: transparent !important;
+	border-color: transparent !important;
+}
+
+.app-preview-settings-url-input::selection {
+	color: var(--vscode-input-foreground, #cccccc);
+	background: var(--vscode-editor-selectionBackground, rgba(0, 122, 204, 0.35));
+}
+
+.app-preview-settings-url-overlay {
+	position: absolute;
+	inset: 0;
+	box-sizing: border-box;
+	height: 32px;
+	padding: 5px 8px;
+	font-size: 12px;
+	font-weight: 400;
+	line-height: 20px;
+	color: var(--vscode-input-foreground, #cccccc);
+	background: var(--vscode-input-background, #3c3c3c);
+	border: 1px solid var(--vscode-input-border, transparent);
+	border-radius: 4px;
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+	pointer-events: none;
+}
+
+.app-preview-settings-url-input-wrap:focus-within .app-preview-settings-url-overlay {
+	border-color: var(--vscode-focusBorder);
+}
+
+.app-preview-settings-url-port {
+	color: var(--vscode-descriptionForeground, #8f8f8f);
+	background: rgba(127, 127, 127, 0.16);
+	border-radius: 3px;
+	padding: 0 2px;
+}
+
+.app-preview-settings-caption {
+	margin-top: 5px;
+	font-size: 11px;
+	line-height: 15px;
+}
+
+.app-preview-settings-field input[type='text']::placeholder {
+	color: var(--vscode-input-placeholderForeground, #a6a6a6);
+	opacity: 1;
+}
+
+.app-preview-settings-field input[type='text']:focus {
+	border-color: var(--vscode-focusBorder);
+}
+
+.app-preview-settings-error {
+	margin-bottom: 12px;
+	padding: 8px 10px;
+	color: var(--vscode-inputValidation-errorForeground);
+	background: var(--vscode-inputValidation-errorBackground);
+	border: 1px solid var(--vscode-inputValidation-errorBorder);
+	border-radius: 4px;
+	font-size: 12px;
+	line-height: 18px;
+}
+
+.app-preview-settings-port-preview {
+	margin: -2px 0 10px;
+	font-size: 11px;
+	line-height: 15px;
+	color: var(--vscode-descriptionForeground, #8f8f8f);
+	user-select: text;
+}
+
+.app-preview-settings-port-token {
+	display: inline-block;
+	padding: 0 4px;
+	color: var(--vscode-editor-foreground, #cccccc);
+	background: var(--vscode-editor-findMatchHighlightBackground, rgba(234, 92, 0, 0.33));
+	border-radius: 3px;
+	font-weight: 600;
+}
+
+.app-preview-settings-shared-summary {
+	margin-top: 2px;
+	padding-top: 6px;
+	border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.app-preview-settings-danger-panel {
+	margin-top: 12px;
+	padding: 12px;
+	background: var(--vscode-inputValidation-warningBackground);
+	border: 1px solid var(--vscode-inputValidation-warningBorder);
+	border-radius: 6px;
+}
+
+.app-preview-settings-warning {
+	margin-bottom: 10px;
+	color: var(--vscode-inputValidation-warningForeground);
+}
+
+.app-preview-settings-checkbox {
+	display: flex;
+	gap: 8px;
+	align-items: flex-start;
+	margin: 8px 0 12px;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--vscode-editorWidget-foreground);
+}
+
+.app-preview-settings-checkbox input {
+	margin-top: 2px;
+}
+
+.app-preview-settings-footer {
+	display: flex;
+	justify-content: flex-end;
+	gap: 8px;
+	padding: 12px 18px 16px;
+	background: var(--vscode-quickInput-background, #252526);
+	border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+}
+
+.app-preview-settings-button {
+	min-width: 76px;
+	height: 28px;
+	padding: 0 12px;
+	font-family: inherit;
+	font-size: 12px;
+	line-height: 28px;
+	color: var(--vscode-button-secondaryForeground, #cccccc);
+	background: var(--vscode-button-secondaryBackground, #3a3d41);
+	border: 0;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.app-preview-settings-button:hover:not(:disabled) {
+	background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.app-preview-settings-button:disabled {
+	opacity: 0.55;
+	cursor: default;
+}
+
+.app-preview-settings-primary-button {
+	color: #ffffff;
+	background: #0000ff;
+}
+
+.app-preview-settings-primary-button:hover:not(:disabled) {
+	background: #0000d6;
+}
+
+.app-preview-settings-link-button {
+	min-width: 0;
+	margin-top: 8px;
+	padding: 0;
+	color: var(--vscode-textLink-foreground);
+	background: transparent;
+}
+
+.app-preview-settings-link-button:hover:not(:disabled) {
+	background: transparent;
+	text-decoration: underline;
+}
+
+.app-preview-settings-danger-button {
+	color: var(--vscode-button-foreground);
+	background: var(--vscode-button-background);
+}
