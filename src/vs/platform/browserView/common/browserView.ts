@@ -303,8 +303,8 @@ export function getBrowserViewAuthNavigationAction(request: IBrowserViewAuthNavi
 		return 'allow';
 	}
 
-	if (request.inAuthWindow && isBrowserViewLocalHttpUrl(request.targetUrl)) {
-		return 'returnToPreview';
+	if (request.inAuthWindow) {
+		return isBrowserViewLocalHttpUrl(request.targetUrl) ? 'returnToPreview' : 'allow';
 	}
 
 	if (!isBrowserViewLocalHttpUrl(request.targetUrl)) {

@@ -74,6 +74,15 @@ suite('BrowserView Auth Flow', () => {
 		}), 'returnToPreview');
 	});
 
+	test('keeps auth window redirects in the same internal tab', () => {
+		assert.strictEqual(getBrowserViewAuthNavigationAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'https://login.example.com/oauth',
+			targetUrl: 'https://sts.example.com/saml',
+			inAuthWindow: true,
+		}), 'allow');
+	});
+
 	test('does not intercept non-web protocols', () => {
 		assert.strictEqual(getBrowserViewAuthNavigationAction({
 			kind: BrowserViewKind.AppPreview,

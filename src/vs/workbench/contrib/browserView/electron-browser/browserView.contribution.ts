@@ -29,6 +29,7 @@ import './features/browserHistoryFeature.js';
 import './features/browserDataStorageFeatures.js';
 import './features/browserDevToolsFeature.js';
 import './features/browserEditorChatFeatures.js';
+import './features/browserEditorScenarioFeatures.js';
 import './features/browserEditorErrorFeatures.js';
 import './features/browserEditorZoomFeature.js';
 import './features/browserEditorEmulationFeatures.js';
@@ -36,6 +37,7 @@ import './features/browserEditorFindFeature.js';
 import './features/browserSearchFeatures.js';
 import './features/browserTabManagementFeatures.js';
 import './features/browserRemoteFeatures.js';
+import './appPreviewScenarioService.js';
 import './browserDesignElement.contribution.js';
 
 Registry.as<IEditorPaneRegistry>(EditorExtensions.EditorPane).registerEditorPane(
