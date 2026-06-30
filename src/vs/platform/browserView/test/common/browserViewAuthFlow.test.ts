@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
-import { BrowserViewKind, getBrowserViewAuthNavigationAction, getBrowserViewExternalLinkAction, getBrowserViewKindForInitialState, isBrowserViewLocalHttpUrl, shouldOpenBrowserViewTargetInternally } from '../../common/browserView.js';
+import { BrowserViewKind, getBrowserViewAuthNavigationAction, getBrowserViewAuthWindowOpenAction, getBrowserViewExternalLinkAction, getBrowserViewKindForInitialState, isBrowserViewLocalHttpUrl, shouldOpenBrowserViewTargetInternally } from '../../common/browserView.js';
 
 suite('BrowserView Auth Flow', () => {
 
@@ -81,6 +81,15 @@ suite('BrowserView Auth Flow', () => {
 			targetUrl: 'https://sts.example.com/saml',
 			inAuthWindow: true,
 		}), 'allow');
+	});
+
+	test('keeps auth window popups in the same internal tab', () => {
+		assert.strictEqual(getBrowserViewAuthWindowOpenAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'https://login.example.com/oauth',
+			targetUrl: 'https://sts.example.com/saml',
+			inAuthWindow: true,
+		}), 'reuseAuthWindow');
 	});
 
 	test('does not intercept non-web protocols', () => {

@@ -214,6 +214,7 @@ export interface IBrowserViewAuthNavigationRequest {
 }
 
 export type BrowserViewAuthNavigationAction = 'allow' | 'openInternal' | 'returnToPreview';
+export type BrowserViewAuthWindowOpenAction = BrowserViewAuthNavigationAction | 'reuseAuthWindow';
 
 export interface IBrowserViewKindInitialState {
 	readonly isSessionAppPreview?: boolean;
@@ -308,6 +309,23 @@ export function getBrowserViewAuthNavigationAction(request: IBrowserViewAuthNavi
 	}
 
 	if (!isBrowserViewLocalHttpUrl(request.targetUrl)) {
+		return 'openInternal';
+	}
+
+	return 'allow';
+}
+
+export function getBrowserViewAuthWindowOpenAction(request: IBrowserViewAuthNavigationRequest): BrowserViewAuthWindowOpenAction {
+	const navigationAction = getBrowserViewAuthNavigationAction(request);
+	if (navigationAction !== 'allow') {
+		return navigationAction;
+	}
+
+	if (request.kind === BrowserViewKind.AppPreview && request.inAuthWindow && isBrowserViewWebUrl(request.targetUrl)) {
+		return 'reuseAuthWindow';
+	}
+
+	if (shouldOpenBrowserViewTargetInternally(request.targetUrl)) {
 		return 'openInternal';
 	}
 

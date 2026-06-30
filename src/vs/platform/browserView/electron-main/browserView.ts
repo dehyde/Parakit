@@ -7,7 +7,7 @@ import { screen, WebContentsView, webContents } from 'electron';
 import { Disposable } from '../../../base/common/lifecycle.js';
 import { Emitter, Event } from '../../../base/common/event.js';
 import { VSBuffer } from '../../../base/common/buffer.js';
-import { getBrowserViewAuthNavigationAction, IBrowserViewBounds, IBrowserViewDevToolsStateEvent, IBrowserViewFocusEvent, IBrowserViewKeyDownEvent, IBrowserViewState, IBrowserViewNavigationEvent, IBrowserViewLoadingEvent, IBrowserViewLoadError, IBrowserViewTitleChangeEvent, IBrowserViewFaviconChangeEvent, IBrowserViewCaptureScreenshotOptions, IBrowserViewFindInPageOptions, IBrowserViewFindInPageResult, IBrowserViewVisibilityEvent, browserViewIsolatedWorldId, browserZoomFactors, browserZoomDefaultIndex, IBrowserViewOwner, IBrowserViewOpenOptions, shouldOpenBrowserViewTargetInternally } from '../common/browserView.js';
+import { getBrowserViewAuthNavigationAction, getBrowserViewAuthWindowOpenAction, IBrowserViewBounds, IBrowserViewDevToolsStateEvent, IBrowserViewFocusEvent, IBrowserViewKeyDownEvent, IBrowserViewState, IBrowserViewNavigationEvent, IBrowserViewLoadingEvent, IBrowserViewLoadError, IBrowserViewTitleChangeEvent, IBrowserViewFaviconChangeEvent, IBrowserViewCaptureScreenshotOptions, IBrowserViewFindInPageOptions, IBrowserViewFindInPageResult, IBrowserViewVisibilityEvent, browserViewIsolatedWorldId, browserZoomFactors, browserZoomDefaultIndex, IBrowserViewOwner, IBrowserViewOpenOptions, shouldOpenBrowserViewTargetInternally } from '../common/browserView.js';
 import { BrowserViewEmulator } from './browserViewEmulator.js';
 import { BrowserViewInspector } from './browserViewInspector.js';
 import { IWindowsMainService } from '../../windows/electron-main/windows.js';
@@ -157,7 +157,23 @@ export class BrowserView extends Disposable {
 		this._ownerWindow.win?.contentView.addChildView(this._view);
 
 		this._view.webContents.setWindowOpenHandler((details) => {
-			if (this._shouldOpenAppPreviewNavigationInternally(details.url)) {
+			const authWindowOpenAction = getBrowserViewAuthWindowOpenAction({
+				kind: this.owner.kind,
+				currentUrl: this.webContents.getURL(),
+				targetUrl: details.url,
+				inAuthWindow: !!this._appPreviewAuthReturnView
+			});
+			if (authWindowOpenAction === 'returnToPreview') {
+				this._returnAppPreviewAuthCallback(details.url);
+				return { action: 'deny' };
+			}
+			if (authWindowOpenAction === 'reuseAuthWindow') {
+				void this.loadURL(details.url).catch(error => {
+					this.logService.error('[BrowserView] Failed to reuse App Preview auth window.', error);
+				});
+				return { action: 'deny' };
+			}
+			if (authWindowOpenAction === 'openInternal') {
 				return {
 					action: 'allow',
 					createWindow: (options) => this._openAppPreviewInternalNavigation(details.url, options).webContents,
@@ -237,15 +253,6 @@ export class BrowserView extends Disposable {
 		this._register(this.session.remote.onDidStop(fireRemoteStatus));
 
 		this.setupEventListeners();
-	}
-
-	private _shouldOpenAppPreviewNavigationInternally(url: string): boolean {
-		return getBrowserViewAuthNavigationAction({
-			kind: this.owner.kind,
-			currentUrl: this.webContents.getURL(),
-			targetUrl: url,
-			inAuthWindow: !!this._appPreviewAuthReturnView
-		}) === 'openInternal';
 	}
 
 	private _openAppPreviewInternalNavigation(url: string, options?: Electron.WebContentsViewConstructorOptions): BrowserView {
