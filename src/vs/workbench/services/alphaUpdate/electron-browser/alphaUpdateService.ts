@@ -1,0 +1,10 @@
+/*---------------------------------------------------------------------------------------------
+ *  Copyright (c) Microsoft Corporation. All rights reserved.
+ *  Licensed under the MIT License. See License.txt in the project root for license information.
+ *--------------------------------------------------------------------------------------------*/
+
+import { registerMainProcessRemoteService } from '../../../../platform/ipc/electron-browser/services.js';
+import { ALPHA_UPDATE_CHANNEL, IAlphaUpdateService } from '../../../../platform/alphaUpdate/common/alphaUpdate.js';
+import { AlphaUpdateChannelClient } from '../../../../platform/alphaUpdate/common/alphaUpdateIpc.js';
+
+registerMainProcessRemoteService(IAlphaUpdateService, ALPHA_UPDATE_CHANNEL, { channelClientCtor: AlphaUpdateChannelClient });

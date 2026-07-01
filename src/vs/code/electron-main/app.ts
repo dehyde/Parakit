@@ -81,6 +81,9 @@ import { ITelemetryService, TelemetryLevel } from '../../platform/telemetry/comm
 import { TelemetryAppenderClient } from '../../platform/telemetry/common/telemetryIpc.js';
 import { ITelemetryServiceConfig, TelemetryService } from '../../platform/telemetry/common/telemetryService.js';
 import { getPiiPathsFromEnvironment, getTelemetryLevel, isInternalTelemetry, NullTelemetryService, supportsTelemetry } from '../../platform/telemetry/common/telemetryUtils.js';
+import { ALPHA_UPDATE_CHANNEL, IAlphaUpdateService } from '../../platform/alphaUpdate/common/alphaUpdate.js';
+import { AlphaUpdateChannel } from '../../platform/alphaUpdate/common/alphaUpdateIpc.js';
+import { AlphaUpdateService } from '../../platform/alphaUpdate/electron-main/alphaUpdateService.js';
 import { IUpdateService } from '../../platform/update/common/update.js';
 import { UpdateChannel } from '../../platform/update/common/updateIpc.js';
 import { NotAvailableUpdateDialog } from '../../platform/update/electron-main/notAvailableUpdateDialog.js';
@@ -1139,6 +1142,9 @@ export class CodeApplication extends Disposable {
 				break;
 		}
 
+		// Alpha Update
+		services.set(IAlphaUpdateService, new SyncDescriptor(AlphaUpdateService));
+
 		// Windows
 		services.set(IWindowsMainService, new SyncDescriptor(WindowsMainService, [machineId, sqmId, devDeviceId, this.userEnv], false));
 		services.set(IAuxiliaryWindowsMainService, new SyncDescriptor(AuxiliaryWindowsMainService, undefined, false));
@@ -1314,6 +1320,9 @@ export class CodeApplication extends Disposable {
 		const updateService = accessor.get(IUpdateService);
 		const updateChannel = new UpdateChannel(updateService);
 		mainProcessElectronServer.registerChannel('update', updateChannel);
+
+		const alphaUpdateChannel = new AlphaUpdateChannel(accessor.get(IAlphaUpdateService));
+		mainProcessElectronServer.registerChannel(ALPHA_UPDATE_CHANNEL, alphaUpdateChannel);
 
 		// Show a native "no updates available" dialog from the focused app's main
 		// process to avoid double dialogs across apps and ensure a native dialog.
