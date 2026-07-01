@@ -12,6 +12,7 @@ import { CommandsRegistry, ICommandService } from '../../../../platform/commands
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { localize } from '../../../../nls.js';
+import { GetDesignerReposStateCommandId, type DesignerRepoItem, type DesignerRepoState } from '../../../services/workspaces/common/designerRepoCommands.js';
 
 const onDidChangeDesignerBranchStateEmitter = new Emitter<DesignerBranchState>();
 
@@ -75,22 +76,6 @@ interface DesignerBranchCheckoutResult {
 		readonly reason: 'dirtyWorkTree' | 'worktreeBranchAlreadyUsed' | 'branchNameRequired' | 'mergeConflicts' | 'noRemote' | 'pushRejected' | 'authRequired' | 'saveFailed' | 'switchFailed' | 'unsafeHostRepository';
 		readonly message: string;
 	};
-}
-
-type DesignerRepoStatus = 'ready' | 'cloning' | 'problem';
-
-interface DesignerRepoItem {
-	readonly name: string;
-	readonly path: string;
-	readonly status: DesignerRepoStatus;
-	readonly isCurrent: boolean;
-	readonly url?: string;
-	readonly message?: string;
-}
-
-interface DesignerRepoState {
-	readonly currentRepoPath: string | undefined;
-	readonly repos: readonly DesignerRepoItem[];
 }
 
 interface DesignerRepoSwitchResult {
@@ -205,9 +190,11 @@ export class DesignerBranchSwitcher extends Disposable {
 
 		if (this.dropdownMode === 'branch') {
 			this.branchFilter = '';
-			this.deferTreeRender();
 			this.installWindowListeners();
-			this.refresh({ updateRemotes: true });
+			if (!this.hasEmptyRepoList()) {
+				this.deferTreeRender();
+				this.refresh({ updateRemotes: true });
+			}
 		} else {
 			this.windowDisposables.clear();
 		}
@@ -357,7 +344,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private async doRefreshRepos(): Promise<void> {
-		this.repoState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.getState');
+		this.repoState = await this.commandService.executeCommand<DesignerRepoState>(GetDesignerReposStateCommandId);
 		this.projectAccessLimited = false;
 	}
 
@@ -422,6 +409,8 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.dropdown.replaceChildren();
 		this.dropdown.hidden = !this.dropdownMode;
 		this.updateDropdownHost();
+		this.repoButton.classList.toggle('designer-branch-switcher__repo-button--empty-cta', this.hasEmptyRepoList());
+		this.branchButton.classList.toggle('designer-branch-switcher__branch-button--empty-repo', this.hasEmptyRepoList());
 		this.repoButton.setAttribute('aria-expanded', String(this.dropdownMode === 'repo'));
 		this.branchButton.setAttribute('aria-expanded', String(this.dropdownMode === 'branch'));
 
@@ -461,6 +450,11 @@ export class DesignerBranchSwitcher extends Disposable {
 
 		if (this.state?.setup) {
 			this.dropdown.append(this.renderBranchSetup(this.state.setup));
+			return;
+		}
+
+		if (this.hasEmptyRepoList()) {
+			this.dropdown.append(this.renderEmptyBranchList());
 			return;
 		}
 
@@ -527,10 +521,22 @@ export class DesignerBranchSwitcher extends Disposable {
 			this.dropdown.append(this.renderProblem(this.repoProblemMessage));
 		}
 
+		if (this.hasEmptyRepoList()) {
+			this.dropdown.append(this.renderEmptyRepoList());
+			return;
+		}
+
 		this.dropdown.append(this.renderRepoList(), this.renderAddRepo());
 	}
 
 	private renderBranchIndicatorIcon(): HTMLElement {
+		if (this.hasEmptyRepoList()) {
+			const icon = document.createElement('span');
+			icon.classList.add('codicon', 'codicon-git-branch', 'designer-branch-switcher__sync', 'designer-branch-switcher__sync--empty');
+			icon.title = localize('designerBranchSwitcherEmptyRepoBranchesUnavailable', "Branches appear after Parakit opens a repository.");
+			return icon;
+		}
+
 		const cloudProblem = this.state?.cloudProblem;
 		const syncState = this.problemMessage || this.repoProblemMessage || cloudProblem ? 'problem' : this.activeSyncState === 'saving' || this.activeSyncState === 'pushing' ? 'syncing' : this.isBusy() ? 'syncing' : this.state?.syncState ?? 'syncing';
 		const icon = document.createElement('span');
@@ -581,6 +587,10 @@ export class DesignerBranchSwitcher extends Disposable {
 			return localize('designerBranchSwitcherConnectRepoLabel', "Connect repo");
 		}
 
+		if (this.hasEmptyRepoList()) {
+			return localize('designerBranchSwitcherEmptyRepoBranchLabel', "Branches");
+		}
+
 		if (this.isLoadingBranchInformation()) {
 			return localize('designerBranchSwitcherLoadingBranchInformation', "Loading branch information...");
 		}
@@ -597,7 +607,15 @@ export class DesignerBranchSwitcher extends Disposable {
 			return localize('designerRepoSwitcherCouldNotOpenRepoLabel', "Couldn’t open {0}", this.getRepoNameForPath(this.blockedRepoPath));
 		}
 
+		if (this.hasEmptyRepoList()) {
+			return localize('designerRepoSwitcherAddRepoLabel', "Add repo");
+		}
+
 		return this.repoState?.repos.find(repo => repo.isCurrent)?.name ?? this.state?.projectName ?? localize('designerBranchSwitcherProjectFallback', "Project");
+	}
+
+	private hasEmptyRepoList(): boolean {
+		return this.repoState?.repos.length === 0;
 	}
 
 	private getRepoNameForPath(repoPath: string): string {
@@ -843,6 +861,34 @@ export class DesignerBranchSwitcher extends Disposable {
 		}
 
 		return list;
+	}
+
+	private renderEmptyRepoList(): HTMLElement {
+		return this.renderEmptyRepoState(
+			'codicon-repo',
+			localize('designerRepoSwitcherEmptyTitle', "No repos added yet"),
+			localize('designerRepoSwitcherEmptyMessage', "Add a repo to start exploring code with Parakit.")
+		);
+	}
+
+	private renderEmptyBranchList(): HTMLElement {
+		return this.renderEmptyRepoState(
+			'codicon-git-branch',
+			localize('designerBranchSwitcherEmptyRepoBranchesTitle', "Add a repo first"),
+			localize('designerBranchSwitcherEmptyRepoBranchesMessage', "Branches appear after Parakit opens a repository.")
+		);
+	}
+
+	private renderEmptyRepoState(iconClass: string, title: string, message: string): HTMLElement {
+		const container = $('.designer-branch-switcher__empty-state');
+		container.append(
+			$(`span.codicon.${iconClass}.designer-branch-switcher__empty-state-icon`),
+			$('.designer-branch-switcher__empty-title', undefined, title),
+			$('.designer-branch-switcher__empty-message', undefined, message),
+			this.renderAddRepo(true)
+		);
+
+		return container;
 	}
 
 	private renderRepoRow(repo: DesignerRepoItem): HTMLElement {
@@ -1372,24 +1418,28 @@ export class DesignerBranchSwitcher extends Disposable {
 		return `design/${branchName.replace(/^design\//, '')}`;
 	}
 
-	private renderAddRepo(): HTMLElement {
+	private renderAddRepo(inEmptyState = false): HTMLElement {
 		const form = document.createElement('form');
 		form.className = 'designer-branch-switcher__repo-add-form';
+		form.classList.toggle('designer-branch-switcher__repo-add-form--empty-state', inEmptyState);
 
 		const chooseFolder = document.createElement('button');
 		chooseFolder.className = 'designer-branch-switcher__repo-source-folder';
 		chooseFolder.type = 'button';
-		chooseFolder.title = localize('designerRepoSwitcherChooseLocalFolderTitle', "Choose Local Folder");
-		chooseFolder.setAttribute('aria-label', localize('designerRepoSwitcherChooseLocalFolderAria', "Choose Local Folder"));
+		chooseFolder.title = localize('designerRepoSwitcherOpenLocalFolderTitle', "Open Local Folder");
+		chooseFolder.setAttribute('aria-label', localize('designerRepoSwitcherOpenLocalFolderAria', "Open Local Folder"));
 		chooseFolder.disabled = this.isBusy();
-		chooseFolder.append($('span.codicon.codicon-folder'));
+		chooseFolder.append(
+			$('span.codicon.codicon-folder-opened'),
+			$('span', undefined, localize('designerRepoSwitcherOpenLocalFolder', "Open local folder"))
+		);
 
 		const input = document.createElement('input');
 		input.className = 'designer-branch-switcher__repo-source-input';
 		input.type = 'text';
 		input.value = this.repoSourceDraft;
-		input.placeholder = localize('designerRepoSwitcherSourcePlaceholder', "Add repo URL or local folder");
-		input.setAttribute('aria-label', localize('designerRepoSwitcherSourceAria', "Repo URL or Local Folder Path"));
+		input.placeholder = localize('designerRepoSwitcherSourcePlaceholder', "Paste repo URL");
+		input.setAttribute('aria-label', localize('designerRepoSwitcherSourceAria', "Repo URL"));
 		this.repoSourceInput = input;
 
 		const add = document.createElement('button');
@@ -1398,16 +1448,18 @@ export class DesignerBranchSwitcher extends Disposable {
 		add.disabled = true;
 		add.append(
 			$('span.codicon.codicon-add'),
-			$('span', undefined, localize('designerRepoSwitcherAdd', "Add"))
+			$('span', undefined, localize('designerRepoSwitcherAdd', "Add repo"))
 		);
 
-		form.append(chooseFolder, input, add);
+		const urlRow = $('.designer-branch-switcher__repo-add-url-row');
+		urlRow.append(input, add);
+		form.append(urlRow, chooseFolder);
 
 		const updateAddButtonState = () => {
 			add.disabled = !input.value.trim() || !!this.addingRepoSource || this.pickingRepoFolder;
 		};
 
-		this.renderDisposables.add(addDisposableListener(chooseFolder, EventType.CLICK, () => this.pickRepoSourceFolder(updateAddButtonState)));
+		this.renderDisposables.add(addDisposableListener(chooseFolder, EventType.CLICK, () => this.pickRepoSourceFolder()));
 		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
 			this.repoSourceDraft = input.value;
 			if (this.repoProblemMessage) {
@@ -1433,7 +1485,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		return form;
 	}
 
-	private async pickRepoSourceFolder(updateAddButtonState: () => void): Promise<void> {
+	private async pickRepoSourceFolder(): Promise<void> {
 		this.pickingRepoFolder = true;
 		let selectedPath: string | undefined;
 		let problem: string | undefined;
@@ -1464,14 +1516,11 @@ export class DesignerBranchSwitcher extends Disposable {
 		}
 
 		if (selectedPath) {
-			this.repoSourceDraft = selectedPath;
 			this.repoProblemMessage = undefined;
-			this.render();
-			this.focusRepoSourceInput();
+			this.addRepoSource(selectedPath);
 			return;
 		}
 
-		updateAddButtonState();
 		this.focusRepoSourceInput();
 	}
 

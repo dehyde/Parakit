@@ -1,6 +1,7 @@
 {
 	"nameShort": "Parakit",
 	"nameLong": "Parakit",
+	"quality": "stable",
 	"applicationName": "code-oss",
 	"dataFolderName": ".vscode-oss",
 	"sharedDataFolderName": ".vscode-oss-shared",

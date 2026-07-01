@@ -5,7 +5,11 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../base/test/common/utils.js';
+import { Extensions as ConfigurationExtensions } from '../../../platform/configuration/common/configurationRegistry.js';
+import type { IConfigurationRegistry } from '../../../platform/configuration/common/configurationRegistry.js';
+import { Registry } from '../../../platform/registry/common/platform.js';
 import { forcePrimarySidebarClosedOnStartup } from '../../browser/layout.js';
+import '../../browser/workbench.contribution.js';
 
 suite('Workbench Layout', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -22,5 +26,12 @@ suite('Workbench Layout', () => {
 		assert.strictEqual(state.get('activityBar.hidden'), true);
 		assert.strictEqual(state.get('sideBar.hidden'), true);
 		assert.strictEqual(state.get('panel.hidden'), false);
+	});
+
+	test('titlebar navigation controls default to hidden', () => {
+		const configurationRegistry = Registry.as<IConfigurationRegistry>(ConfigurationExtensions.Configuration);
+		const navigationControl = configurationRegistry.getConfigurationProperties()['workbench.navigationControl.enabled'];
+
+		assert.strictEqual(navigationControl.default, false);
 	});
 });

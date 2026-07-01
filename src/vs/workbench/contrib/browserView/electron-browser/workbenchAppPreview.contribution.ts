@@ -33,6 +33,7 @@ import { IWorkspaceContextService } from '../../../../platform/workspace/common/
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { DesignerAddRepoChoice, GetDesignerReposStateCommandId, shouldShowDesignerEmptyRepoFtux, ShowDesignerAddRepoCommandId, type DesignerRepoState } from '../../../services/workspaces/common/designerRepoCommands.js';
 import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, IPreparedToolInvocation, ToolDataSource, ToolProgress } from '../../chat/common/tools/languageModelToolsService.js';
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
@@ -45,6 +46,7 @@ import { IBrowserViewWorkbenchService } from '../common/browserView.js';
 import { playwrightInvokeRaw } from './tools/browserToolHelpers.js';
 
 const APP_PREVIEW_ID_PREFIX = 'workbench-app-preview-';
+const APP_PREVIEW_EMPTY_REPO_ID = 'workbench-app-preview-empty-repo';
 const APP_PREVIEW_URL_STORAGE_KEY = 'workbench.appPreview.url';
 const APP_PREVIEW_OVERRIDES_STORAGE_KEY = 'workbench.appPreview.overrides';
 const APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY = 'workbench.appPreview.branchRuntime';
@@ -938,7 +940,14 @@ export class WorkbenchAppPreviewController extends Disposable {
 	async ensurePreview(reveal: boolean, options?: { skipPreferredNavigation?: boolean }): Promise<BrowserEditorInput | undefined> {
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		if (!root) {
-			return undefined;
+			if (this._workspaceRootKey !== undefined) {
+				this._stopPreviewServer();
+			}
+			this._workspaceRootKey = undefined;
+			this._lastBranchName = undefined;
+			this._hasObservedBranchName = false;
+			this._lastWorkspaceContext = undefined;
+			return this._ensureEmptyRepoPreview(reveal);
 		}
 
 		const rootKey = root.toString();
@@ -996,6 +1005,53 @@ export class WorkbenchAppPreviewController extends Disposable {
 		void this._navigatePreferredUrl({ isNewPreview, forceNavigate: workspaceChanged }).catch(error => {
 			this._logService.error('[WorkbenchAppPreview] Failed to navigate app preview.', error);
 		});
+		return preview;
+	}
+
+	private async _ensureEmptyRepoPreview(reveal: boolean): Promise<BrowserEditorInput | undefined> {
+		let repoState: DesignerRepoState | undefined;
+		try {
+			repoState = await this._commandService.executeCommand<DesignerRepoState>(GetDesignerReposStateCommandId);
+		} catch (error) {
+			this._logService.debug('[WorkbenchAppPreview] Empty repo state is unavailable.', error);
+			return undefined;
+		}
+
+		if (!shouldShowDesignerEmptyRepoFtux(repoState)) {
+			return undefined;
+		}
+
+		if (!this._preview || this._preview.isDisposed() || this._preview.id !== APP_PREVIEW_EMPTY_REPO_ID) {
+			this._preview = this._browserViewService.getOrCreateLazy(APP_PREVIEW_EMPTY_REPO_ID, {
+				url: 'about:blank',
+				title: localize('workbenchAppPreviewTitle', "App Preview"),
+				isSessionAppPreview: true,
+			}, { kind: BrowserViewKind.AppPreview });
+
+			this._register(this._preview.onBeforeDispose(e => {
+				if (!this._preview?.isDisposed()) {
+					e.veto();
+				}
+			}));
+		}
+		this._installPreviewActionListener(this._preview);
+
+		const preview = this._preview;
+		const activeGroup = this._editorGroupsService.activeGroup;
+		const shouldOpen = reveal || activeGroup.getIndexOfEditor(preview) !== 0 || !activeGroup.isPinned(preview);
+		if (shouldOpen) {
+			const options: IEditorOptions = { pinned: true, index: 0, preserveFocus: !reveal };
+			await this._editorService.openEditor(preview, options, activeGroup);
+			activeGroup.pinEditor(preview);
+		}
+
+		this._showPreviewStartupPage({
+			phase: 'emptyRepo',
+			title: getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined),
+			message: localize('workbenchAppPreviewEmptyRepoMessage', "Parakit needs a repo before it can show an app preview."),
+			actions: ['pasteRepoUrl', 'openLocalFolder']
+		});
+
 		return preview;
 	}
 
@@ -1072,7 +1128,19 @@ export class WorkbenchAppPreviewController extends Disposable {
 			void this._copyPreviewStartupContext().catch(error => {
 				this._logService.error('[WorkbenchAppPreview] Failed to copy preview startup context.', error);
 			});
+		} else if (action === 'pasteRepoUrl') {
+			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.PasteRepoUrl).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to start add repo URL flow.', error);
+			});
+		} else if (action === 'openLocalFolder') {
+			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.OpenLocalFolder).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to start open local folder flow.', error);
+			});
 		}
+	}
+
+	private async _showAddRepoFromStartupPage(choice: DesignerAddRepoChoice): Promise<void> {
+		await this._commandService.executeCommand(ShowDesignerAddRepoCommandId, { choice });
 	}
 
 	private async _retryPreviewStartup(): Promise<void> {

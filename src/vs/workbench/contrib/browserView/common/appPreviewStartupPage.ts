@@ -7,9 +7,9 @@ import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 
 export const WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT = 150_000;
 
-export type WorkbenchAppPreviewStartupPhase = 'starting' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'setup';
+export type WorkbenchAppPreviewStartupPhase = 'starting' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'setup' | 'emptyRepo';
 export type WorkbenchAppPreviewStartupStageStatus = 'done' | 'current' | 'pending';
-export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy';
+export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy' | 'pasteRepoUrl' | 'openLocalFolder';
 
 export interface IWorkbenchAppPreviewStartupStage {
 	readonly label: string;
@@ -61,6 +61,9 @@ export function getWorkbenchAppPreviewStartupTitle(phase: WorkbenchAppPreviewSta
 	if (phase === 'setup') {
 		return 'Preview needs configuration';
 	}
+	if (phase === 'emptyRepo') {
+		return 'Add a repo to preview your app';
+	}
 	if (phase === 'opening') {
 		return `Opening preview of ${subject}`;
 	}
@@ -89,7 +92,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 
 	const actionButton = (action: WorkbenchAppPreviewStartupAction, label: string): string =>
 		actions.has(action) ? `<button type="button" data-action="${action}">${escapeHtml(label)}</button>` : '';
-	const stageIcon = (status: WorkbenchAppPreviewStartupStageStatus): string => status === 'done' ? '&#10003;' : status === 'current' ? '&bull;' : '';
+	const stageIcon = (status: WorkbenchAppPreviewStartupStageStatus): string => status === 'done' ? '&#10003;' : status === 'current' ? '<span class="stage-spinner" aria-hidden="true"></span>' : '';
 	const stageRows = stages.map(stage => `<li class="stage stage-${stage.status}">
 		<span class="stage-icon">${stageIcon(stage.status)}</span>
 		<span class="stage-label">${escapeHtml(stage.label)}</span>
@@ -108,7 +111,8 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--app-preview-background); color: var(--app-preview-foreground); font-family: inherit; font-size: 13px; }
 	main { width: min(560px, calc(100vw - 48px)); display: grid; gap: 18px; }
 	.status { display: flex; align-items: center; gap: 14px; }
-	.startup-animation { width: 54px; height: 54px; object-fit: contain; flex: 0 0 auto; }
+	.startup-animation-frame { width: 54px; height: 72px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; }
+	.startup-animation { width: 54px; height: 72px; object-fit: contain; overflow: visible; display: block; }
 	.icon { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--app-preview-accent); border-radius: 50%; color: var(--app-preview-accent); font-size: 14px; font-weight: 600; }
 	h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 26px; letter-spacing: 0; }
 	p { margin: 0; line-height: 1.45; color: var(--app-preview-muted); }
@@ -119,7 +123,9 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	.stage-done { color: var(--app-preview-muted); }
 	.stage-done .stage-icon { color: var(--app-preview-accent); }
 	.stage-pending { color: var(--app-preview-subtle); }
-	.stage-icon { width: 20px; text-align: center; font-size: 13px; }
+	.stage-icon { width: 20px; min-height: 18px; display: grid; place-items: center; text-align: center; font-size: 13px; }
+	.stage-spinner { width: 8px; height: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; box-sizing: border-box; animation: app-preview-stage-spinner 900ms linear infinite; }
+	@keyframes app-preview-stage-spinner { to { transform: rotate(360deg); } }
 	.stage-label { overflow-wrap: anywhere; }
 	.stage-elapsed { font-weight: 500; color: var(--app-preview-muted); font-variant-numeric: tabular-nums; }
 	.activity { min-height: 18px; font-size: 12px; color: var(--app-preview-muted); }
@@ -138,7 +144,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 <body>
 <main>
 	<section class="status">
-		${state.phase === 'slow' || state.phase === 'failed' ? '<div class="icon">!</div>' : `<img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true">`}
+		${state.phase === 'emptyRepo' ? '<div class="icon">+</div>' : state.phase === 'slow' || state.phase === 'failed' ? '<div class="icon">!</div>' : `<span class="startup-animation-frame"><img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true"></span>`}
 		<div>
 			<h1>${escapeHtml(state.title)}</h1>
 			<p>${escapeHtml(state.message)}</p>
@@ -151,6 +157,8 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		${actionButton('restart', 'Restart preview server')}
 		${actionButton('logs', 'Show terminal logs')}
 		${actionButton('copy', 'Copy context for agent')}
+		${actionButton('pasteRepoUrl', 'Paste repo URL')}
+		${actionButton('openLocalFolder', 'Open local folder')}
 	</section>` : ''}
 	<div class="copied" aria-live="polite"></div>
 	${detailRows.length ? `<details class="more-info"><summary>Show more info</summary><p class="caption">${escapeHtml(detailRows.join('\n'))}</p></details>` : ''}

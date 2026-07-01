@@ -345,6 +345,26 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(getWorkbenchAppPreviewStartupTitle('healthChecking', undefined), 'Starting preview of this workspace');
 	});
 
+	test('startup title names the empty repo state', () => {
+		assert.strictEqual(getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined), 'Add a repo to preview your app');
+	});
+
+	test('startup page renders empty repo add actions', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'emptyRepo',
+			title: getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined),
+			message: 'Parakit needs a repo before it can show an app preview.',
+			actions: ['pasteRepoUrl', 'openLocalFolder'],
+		}));
+
+		assert.match(html, /<div class="icon">\+<\/div>/);
+		assert.match(html, /Paste repo URL/);
+		assert.match(html, /data-action="pasteRepoUrl"/);
+		assert.match(html, /Open local folder/);
+		assert.match(html, /data-action="openLocalFolder"/);
+		assert.doesNotMatch(html, /Copy context for agent/);
+	});
+
 	test('startup page keeps preview details collapsed behind show more info', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
@@ -362,14 +382,30 @@ suite('Workbench App Preview', () => {
 		assert.match(html, /<p class="caption">Branch: feature\/cart\nPrevious branch: main\nPort: 3001\nHealth check: http:\/\/127\.0\.0\.1:3001\/health\nPreview URL: http:\/\/127\.0\.0\.1:3001\/<\/p>/);
 	});
 
-	test('startup page renders the startup animation one and a half times larger', () => {
+	test('startup page renders current stage marker as an animated spinner', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'healthChecking',
+			title: 'Starting preview of feature/cart',
+			message: 'Waiting for app response.',
+			stages: [{ label: 'Wait for app response', status: 'current' }],
+		}));
+
+		assert.match(html, /@keyframes app-preview-stage-spinner/);
+		assert.match(html, /<span class="stage-spinner" aria-hidden="true"><\/span>/);
+		assert.match(html, /\.stage-spinner \{[^}]*animation: app-preview-stage-spinner 900ms linear infinite;/);
+		assert.doesNotMatch(html, /<span class="stage-icon">&bull;<\/span>/);
+	});
+
+	test('startup page renders the startup animation in an unclipped frame', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
 			title: 'Starting preview of feature/cart',
 			message: 'Waiting for app response.',
 		}));
 
-		assert.match(html, /\.startup-animation \{ width: 54px; height: 54px;/);
+		assert.match(html, /\.startup-animation-frame \{ width: 54px; height: 72px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; \}/);
+		assert.match(html, /\.startup-animation \{ width: 54px; height: 72px; object-fit: contain; overflow: visible; display: block; \}/);
+		assert.match(html, /<span class="startup-animation-frame"><img class="startup-animation"/);
 	});
 
 	test('startup page uses workbench typography and pure blue accent styling', () => {
