@@ -5,7 +5,7 @@
 
 import 'mocha';
 import * as assert from 'assert';
-import { DesignerAutoSaveScheduler, getDesignerAutoSavePolicy, isDesignerBranchName } from '../designerAutoSave';
+import { DesignerAutoSaveScheduler, DesignerMainlineManualRemoteApprovalText, getDesignerAutoSavePolicy, isDesignerBranchName, isDesignerMainlineBranchName } from '../designerAutoSave';
 
 suite('designer auto-save', () => {
 	suite('policy', () => {
@@ -17,30 +17,75 @@ suite('designer auto-save', () => {
 			assert.strictEqual(isDesignerBranchName(undefined), false);
 		});
 
+		test('recognizes mainline branches', () => {
+			assert.strictEqual(isDesignerMainlineBranchName('main'), true);
+			assert.strictEqual(isDesignerMainlineBranchName('master'), true);
+			assert.strictEqual(isDesignerMainlineBranchName('design/main'), false);
+			assert.strictEqual(isDesignerMainlineBranchName('feature/main'), false);
+			assert.strictEqual(isDesignerMainlineBranchName(undefined), false);
+		});
+
 		test('pushes design branches automatically', () => {
 			assert.deepStrictEqual(getDesignerAutoSavePolicy('design/card', 'background'), {
 				branchKind: 'design',
 				commit: true,
 				push: true,
-				requiresRemoteConfirmation: false
+				requiresRemoteConfirmation: false,
+				requiresMainlineApproval: false,
+				promptForManualCommit: false
 			});
 		});
 
-		test('commits non-design branches locally without automatic push', () => {
-			assert.deepStrictEqual(getDesignerAutoSavePolicy('main', 'background'), {
+		test('does not commit shared branches automatically and prompts for manual commit', () => {
+			assert.deepStrictEqual(getDesignerAutoSavePolicy('feature/card', 'background'), {
 				branchKind: 'shared',
-				commit: true,
+				commit: false,
 				push: false,
-				requiresRemoteConfirmation: true
+				requiresRemoteConfirmation: true,
+				requiresMainlineApproval: false,
+				promptForManualCommit: true
 			});
 		});
 
-		test('allows confirmed shared branch remote push', () => {
-			assert.deepStrictEqual(getDesignerAutoSavePolicy('main', 'manualRemote', true), {
+		test('allows confirmed shared branch remote push without committing', () => {
+			assert.deepStrictEqual(getDesignerAutoSavePolicy('feature/card', 'manualRemote', true), {
 				branchKind: 'shared',
-				commit: true,
+				commit: false,
 				push: true,
-				requiresRemoteConfirmation: true
+				requiresRemoteConfirmation: true,
+				requiresMainlineApproval: false,
+				promptForManualCommit: true
+			});
+		});
+
+		test('never commits mainline branches automatically and suppresses manual commit prompts', () => {
+			assert.deepStrictEqual(getDesignerAutoSavePolicy('main', 'background'), {
+				branchKind: 'mainline',
+				commit: false,
+				push: false,
+				requiresRemoteConfirmation: true,
+				requiresMainlineApproval: true,
+				promptForManualCommit: false
+			});
+		});
+
+		test('requires explicit mainline approval text before remote push', () => {
+			assert.strictEqual(DesignerMainlineManualRemoteApprovalText, 'I approve');
+			assert.deepStrictEqual(getDesignerAutoSavePolicy('master', 'manualRemote', true), {
+				branchKind: 'mainline',
+				commit: false,
+				push: false,
+				requiresRemoteConfirmation: true,
+				requiresMainlineApproval: true,
+				promptForManualCommit: false
+			});
+			assert.deepStrictEqual(getDesignerAutoSavePolicy('master', 'manualRemote', true, true), {
+				branchKind: 'mainline',
+				commit: false,
+				push: true,
+				requiresRemoteConfirmation: true,
+				requiresMainlineApproval: true,
+				promptForManualCommit: false
 			});
 		});
 	});

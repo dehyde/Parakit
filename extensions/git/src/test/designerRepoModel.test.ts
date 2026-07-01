@@ -5,7 +5,7 @@
 
 import 'mocha';
 import * as assert from 'assert';
-import { mergeDesignerKnownRepos } from '../designerRepoModel';
+import { parseDesignerRepoSource, mergeDesignerKnownRepos } from '../designerRepoModel';
 
 suite('Designer Repo Model', () => {
 	test('keeps current repo when switching to another repo', () => {
@@ -22,6 +22,18 @@ suite('Designer Repo Model', () => {
 		assert.deepStrictEqual(repos.map(repo => repo.path), [
 			'/work/current',
 			'/work/managed/target'
+		]);
+	});
+
+	test('classifies remote and local repo sources', () => {
+		assert.deepStrictEqual([
+			parseDesignerRepoSource('https://github.com/workplan/design-system.git'),
+			parseDesignerRepoSource('git@github.com:workplan/design-system.git'),
+			parseDesignerRepoSource('/Users/test/project')
+		], [
+			{ kind: 'remote', url: 'https://github.com/workplan/design-system.git' },
+			{ kind: 'remote', url: 'git@github.com:workplan/design-system.git' },
+			{ kind: 'localPath', path: '/Users/test/project' }
 		]);
 	});
 });

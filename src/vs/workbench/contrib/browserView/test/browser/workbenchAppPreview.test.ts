@@ -372,6 +372,44 @@ suite('Workbench App Preview', () => {
 		assert.match(html, /\.startup-animation \{ width: 54px; height: 54px;/);
 	});
 
+	test('startup page uses workbench typography and pure blue accent styling', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'slow',
+			title: 'Preview is taking longer than expected',
+			message: 'The server is still starting.',
+			actions: ['copy'],
+		}));
+
+		assert.match(html, /--app-preview-accent: #0000ff;/);
+		assert.match(html, /font-family: "IBM Plex Mono", monospace;/);
+		assert.match(html, /\.stage-current \.stage-icon \{ color: var\(--app-preview-accent\); \}/);
+		assert.match(html, /button \{ appearance: none; border: 0; border-radius: 4px; background: var\(--app-preview-accent\); color: #ffffff;/);
+	});
+
+	test('startup page hides agent context copy before the slow state', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'healthChecking',
+			title: 'Starting preview of feature/cart',
+			message: 'Waiting for app response.',
+			actions: ['copy'],
+		}));
+
+		assert.doesNotMatch(html, /Copy context for agent/);
+		assert.doesNotMatch(html, /data-action="copy"/);
+	});
+
+	test('startup page shows agent context copy in the slow state', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'slow',
+			title: 'Preview is taking longer than expected',
+			message: 'The server is still starting.',
+			actions: ['copy'],
+		}));
+
+		assert.match(html, /Copy context for agent/);
+		assert.match(html, /data-action="copy"/);
+	});
+
 	test('startup health timeout waits two and a half minutes before showing the slow state', () => {
 		assert.strictEqual(WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT, 150_000);
 	});

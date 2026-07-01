@@ -233,7 +233,7 @@ function areWorkbenchAppPreviewUrlsEqual(first: string | undefined, second: stri
 	}
 }
 
-function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boolean {
+export function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boolean {
 	if (!url) {
 		return false;
 	}

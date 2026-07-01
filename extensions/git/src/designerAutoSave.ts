@@ -6,31 +6,47 @@
 export const DesignerAutoSaveCommitMessage = 'chore(design): auto-save changes';
 export const DesignerAutoSaveIdleDelayMs = 30_000;
 export const DesignerAutoSaveMaxDelayMs = 120_000;
-export const DesignerAutoSaveLocalReminderCommitCount = 7;
+export const DesignerMainlineManualRemoteApprovalText = 'I approve';
 
 export type DesignerAutoSaveTrigger = 'background' | 'manual' | 'preSwitch' | 'preCriticalAction' | 'manualRemote';
-export type DesignerAutoSaveBranchKind = 'design' | 'shared';
+export type DesignerAutoSaveBranchKind = 'design' | 'shared' | 'mainline';
 
 export interface DesignerAutoSavePolicy {
 	readonly branchKind: DesignerAutoSaveBranchKind;
 	readonly commit: boolean;
 	readonly push: boolean;
 	readonly requiresRemoteConfirmation: boolean;
+	readonly requiresMainlineApproval: boolean;
+	readonly promptForManualCommit: boolean;
 }
 
 export function isDesignerBranchName(branchName: string | undefined): boolean {
 	return branchName?.startsWith('design/') === true;
 }
 
-export function getDesignerAutoSavePolicy(branchName: string | undefined, trigger: DesignerAutoSaveTrigger, remoteConfirmed = false): DesignerAutoSavePolicy {
-	const branchKind: DesignerAutoSaveBranchKind = isDesignerBranchName(branchName) ? 'design' : 'shared';
-	const requiresRemoteConfirmation = branchKind === 'shared';
+export function isDesignerMainlineBranchName(branchName: string | undefined): boolean {
+	return branchName === 'main' || branchName === 'master';
+}
+
+export function getDesignerAutoSavePolicy(branchName: string | undefined, trigger: DesignerAutoSaveTrigger, remoteConfirmed = false, mainlineApproved = false): DesignerAutoSavePolicy {
+	const branchKind: DesignerAutoSaveBranchKind = isDesignerBranchName(branchName)
+		? 'design'
+		: isDesignerMainlineBranchName(branchName)
+			? 'mainline'
+			: 'shared';
+	const requiresRemoteConfirmation = branchKind !== 'design';
+	const requiresMainlineApproval = branchKind === 'mainline';
+	const remotePushConfirmed = trigger === 'manualRemote' && remoteConfirmed;
 
 	return {
 		branchKind,
-		commit: true,
-		push: branchKind === 'design' || (trigger === 'manualRemote' && remoteConfirmed),
-		requiresRemoteConfirmation
+		commit: branchKind === 'design',
+		push: branchKind === 'design' ||
+			(branchKind === 'shared' && remotePushConfirmed) ||
+			(branchKind === 'mainline' && remotePushConfirmed && mainlineApproved),
+		requiresRemoteConfirmation,
+		requiresMainlineApproval,
+		promptForManualCommit: branchKind === 'shared'
 	};
 }
 

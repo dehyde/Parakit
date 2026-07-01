@@ -39,6 +39,10 @@ export interface DesignerBranchTreeNode {
 	readonly children: readonly DesignerBranchTreeNode[];
 }
 
+export interface DesignerBranchSetup {
+	readonly reason: 'notGitRepository';
+}
+
 export interface DesignerBranchState {
 	readonly projectName: string;
 	readonly defaultBranch: string | undefined;
@@ -46,6 +50,7 @@ export interface DesignerBranchState {
 	readonly cloudProblem?: DesignerCloudProblem;
 	readonly syncState: 'synced' | 'syncing' | 'problem';
 	readonly repositoryReady?: boolean;
+	readonly setup?: DesignerBranchSetup;
 	readonly branches: readonly DesignerBranchItem[];
 	readonly tree: readonly DesignerBranchTreeNode[];
 }

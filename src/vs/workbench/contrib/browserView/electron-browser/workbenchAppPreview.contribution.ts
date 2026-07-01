@@ -37,7 +37,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
 import { createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
@@ -2102,6 +2102,18 @@ export class WorkbenchAppPreviewController extends Disposable {
 					this._previewStartupInProgress = false;
 					this._startHealthPolling();
 					await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+				} else if (this._serverTerminalExited) {
+					this._serverHealth = 'unhealthy';
+					this._serverState = 'failed';
+					this._serverMessage = localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly.");
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+						message: localize('appPreviewServerExitedDetails', "The server process exited before the health check passed. Check the terminal logs for errors."),
+						url: this._serverUrl,
+						healthUrl: this._serverHealthUrl,
+						command: this._serverCommand,
+						cwd
+					}));
+					this._previewStartupInProgress = false;
 				} else {
 					this._serverHealth = 'unhealthy';
 					this._serverMessage = localize('appPreviewHealthTimeoutMessage', "Preview is taking longer than expected.");
@@ -2226,12 +2238,14 @@ export class WorkbenchAppPreviewController extends Disposable {
 			phase === 'serverStarting' ? localize('appPreviewServerInitializing', "Server is initializing.") : undefined,
 			phase === 'healthChecking' ? localize('appPreviewHealthCheckWaiting', "Health check is waiting for the app to respond.") : undefined,
 			phase === 'slow' ? localize('appPreviewSlowHint', "The server may still be compiling or waiting on a dependency.") : undefined,
-			phase === 'failed' ? localize('appPreviewFailedHint', "Use the context below to ask the agent to diagnose the startup failure.") : undefined,
+			phase === 'failed' ? localize('appPreviewFailedHint', "Check the terminal logs or restart the preview server.") : undefined,
 			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a saved preview URL.") : undefined,
 		].filter((value): value is string => !!value);
-		const actions: IPreviewStartupPageState['actions'] = phase === 'slow' || phase === 'failed' || phase === 'setup'
+		const actions: IPreviewStartupPageState['actions'] = phase === 'slow'
 			? ['retry', 'restart', 'logs', 'copy']
-			: ['copy'];
+			: phase === 'failed' || phase === 'setup'
+				? ['retry', 'restart', 'logs']
+				: [];
 
 		return {
 			phase,
@@ -2279,6 +2293,9 @@ export class WorkbenchAppPreviewController extends Disposable {
 		while (Date.now() - startedAt < timeoutMs) {
 			if (await this._checkServerHealthNow()) {
 				return true;
+			}
+			if (this._serverTerminalExited) {
+				return false;
 			}
 			await new Promise(resolve => mainWindow.setTimeout(resolve, PREVIEW_STARTUP_HEALTH_INTERVAL));
 		}
@@ -2428,41 +2445,45 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (event.loading || !event.error || this._previewStartupInProgress || this._previewLoadFailureRecoveryInFlight) {
 			return;
 		}
-		if (!this._isRecoverablePreviewLoadError(event.error)) {
-			return;
-		}
 
-		const root = getWorkspaceRoot(this._workspaceContextService);
-		if (!root) {
-			return;
-		}
+		if (this._isRecoverablePreviewLoadError(event.error)) {
+			const root = getWorkspaceRoot(this._workspaceContextService);
+			if (!root) {
+				return;
+			}
 
-		this._previewLoadFailureRecoveryInFlight = true;
-		try {
-			const branchName = await this._resolveWorkspaceBranchName(root);
-			this._lastHealthError = `${event.error.errorDescription} (${event.error.errorCode}) while loading ${event.error.url}`;
-			this._serverHealth = 'unhealthy';
-			if (event.error.errorCode === -7 && this._isManagedPreviewServerProcessAlive()) {
-				this._showPreviewStartupPage(this._createPreviewStartupPageState('slow', root, branchName, this._lastWorkspaceContext, {
-					message: localize('appPreviewLoadTimedOutWaiting', "Preview is taking longer than expected. Waiting for the app to respond."),
+			this._previewLoadFailureRecoveryInFlight = true;
+			try {
+				const branchName = await this._resolveWorkspaceBranchName(root);
+				this._lastHealthError = `${event.error.errorDescription} (${event.error.errorCode}) while loading ${event.error.url}`;
+				this._serverHealth = 'unhealthy';
+				if (event.error.errorCode === -7 && this._isManagedPreviewServerProcessAlive()) {
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('slow', root, branchName, this._lastWorkspaceContext, {
+						message: localize('appPreviewLoadTimedOutWaiting', "Preview is taking longer than expected. Waiting for the app to respond."),
+						url: this._serverUrl ?? event.error.url,
+						healthUrl: this._serverHealthUrl,
+						command: this._serverCommand,
+						cwd: this._serverCwd
+					}));
+					return;
+				}
+
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
+					message: localize('appPreviewLoadFailedRestarting', "Preview lost connection. Restarting the server and reopening when it is ready."),
 					url: this._serverUrl ?? event.error.url,
 					healthUrl: this._serverHealthUrl,
 					command: this._serverCommand,
 					cwd: this._serverCwd
 				}));
-				return;
+				await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
+			} finally {
+				this._previewLoadFailureRecoveryInFlight = false;
 			}
+			return;
+		}
 
-			this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
-				message: localize('appPreviewLoadFailedRestarting', "Preview lost connection. Restarting the server and reopening when it is ready."),
-				url: this._serverUrl ?? event.error.url,
-				healthUrl: this._serverHealthUrl,
-				command: this._serverCommand,
-				cwd: this._serverCwd
-			}));
-			await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
-		} finally {
-			this._previewLoadFailureRecoveryInFlight = false;
+		if (this._isUnmanagedLocalhostConnectionFailure(event.error)) {
+			await this._handleUnmanagedLocalhostConnectionFailure(event.error);
 		}
 	}
 
@@ -2473,6 +2494,38 @@ export class WorkbenchAppPreviewController extends Disposable {
 			serverUrl: this._serverUrl,
 			activeManagedPreviewUrl: this._activeManagedPreviewUrl,
 		});
+	}
+
+	private _isUnmanagedLocalhostConnectionFailure(error: IBrowserViewLoadError): boolean {
+		return (
+			(error.errorCode === -102 || error.errorCode === -105 || error.errorCode === -106) &&
+			isWorkbenchAppPreviewLoopbackUrl(error.url)
+		);
+	}
+
+	private async _handleUnmanagedLocalhostConnectionFailure(error: IBrowserViewLoadError): Promise<void> {
+		const root = getWorkspaceRoot(this._workspaceContextService);
+		if (!root) {
+			return;
+		}
+
+		this._previewLoadFailureRecoveryInFlight = true;
+		try {
+			const branchName = await this._resolveWorkspaceBranchName(root);
+			const devConfig = await readDevConfig(this._fileService, root);
+
+			if (devConfig) {
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
+					message: localize('appPreviewUnmanagedStarting', "Preview server is not running. Starting it now."),
+					url: error.url,
+				}));
+				await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
+			} else {
+				this._showPreviewSetupState(root, branchName);
+			}
+		} finally {
+			this._previewLoadFailureRecoveryInFlight = false;
+		}
 	}
 
 	private async _handleBackgroundHealthFailure(): Promise<void> {

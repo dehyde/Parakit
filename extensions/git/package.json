@@ -59,6 +59,8 @@
     "onCommand:_designerBranches.create",
     "onCommand:_designerRepos.getState",
     "onCommand:_designerRepos.clone",
+    "onCommand:_designerRepos.addSource",
+    "onCommand:_designerRepos.connectCurrentFolderToRemote",
     "onCommand:_designerRepos.switch",
     "onCommand:_designerRepos.saveAndSwitch",
     "onCommand:_designerRepos.remove",

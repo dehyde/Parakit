@@ -9,6 +9,10 @@ export interface DesignerKnownRepo {
 	readonly url?: string;
 }
 
+export type DesignerRepoSource =
+	| { readonly kind: 'remote'; readonly url: string }
+	| { readonly kind: 'localPath'; readonly path: string };
+
 interface MergeDesignerKnownReposOptions {
 	readonly currentRepo?: DesignerKnownRepo;
 	readonly storedRepos: readonly { readonly path?: string; readonly name?: string; readonly url?: string }[];
@@ -47,6 +51,15 @@ export function getDesignerRepoLabel(repoPath: string): string {
 	return repoPath.split(/[\\/]/).filter(Boolean).at(-1) || repoPath;
 }
 
+export function parseDesignerRepoSource(source: string): DesignerRepoSource {
+	const trimmed = source.trim();
+	if (isRemoteRepoSource(trimmed)) {
+		return { kind: 'remote', url: trimmed };
+	}
+
+	return { kind: 'localPath', path: trimTrailingSeparators(trimmed) };
+}
+
 function appendRepo(repos: DesignerKnownRepo[], repo: DesignerKnownRepo | undefined, hiddenRepoPaths: readonly string[], forceInclude: boolean): void {
 	if (!repo?.path) {
 		return;
@@ -76,4 +89,16 @@ function pathEquals(first: string, second: string): boolean {
 
 function normalizePath(repoPath: string): string {
 	return repoPath.replace(/\\/g, '/').toLowerCase();
+}
+
+function isRemoteRepoSource(source: string): boolean {
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+		return true;
+	}
+
+	return /^[^@\s]+@[^:\s]+:.+/.test(source);
+}
+
+function trimTrailingSeparators(value: string): string {
+	return value.replace(/[\\/]+$/, '');
 }

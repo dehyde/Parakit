@@ -26,6 +26,7 @@ const OVERLAY_DEFINITIONS: ReadonlyArray<{ className: string; type: BrowserOverl
 	{ className: 'editor-widget', type: BrowserOverlayType.Hover },
 	{ className: 'suggest-details-container', type: BrowserOverlayType.Hover },
 	{ className: 'designer-branch-switcher__dropdown', type: BrowserOverlayType.Menu },
+	{ className: 'browser-scenario-panel', type: BrowserOverlayType.Menu },
 	{ className: 'app-preview-settings-modal-block', type: BrowserOverlayType.Dialog },
 	{ className: 'monaco-dialog-modal-block', type: BrowserOverlayType.Dialog },
 	{ className: 'monaco-modal-editor-block', type: BrowserOverlayType.Dialog },

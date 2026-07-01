@@ -1274,19 +1274,50 @@
 
 .browser-scenario-panel {
 	position: fixed;
-	z-index: 1000;
+	z-index: 100000;
+	--browser-scenario-separator: color-mix(in srgb, var(--vscode-dropdown-foreground, #D4D4D4) 32%, transparent);
+	--browser-scenario-toggle-border: color-mix(in srgb, var(--vscode-dropdown-foreground, #D4D4D4) 42%, transparent);
 	max-height: min(620px, calc(100vh - 72px));
 	overflow: auto;
-	color: var(--vscode-editorWidget-foreground);
-	background: var(--vscode-editorWidget-background);
-	border: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	color: var(--vscode-dropdown-foreground, var(--vscode-menu-foreground, #D4D4D4));
+	background: color-mix(in srgb, var(--vscode-dropdown-background, #191A1B) 92%, var(--vscode-macos-vibrant-surface-background, #191A1B) 8%);
+	border: 1px solid var(--vscode-widget-border, var(--vscode-dropdown-border, rgba(255, 255, 255, 0.16)));
 	border-radius: 6px;
-	box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+	box-shadow:
+		0 16px 32px rgba(0, 0, 0, 0.36),
+		0 3px 10px rgba(0, 0, 0, 0.26);
+	box-sizing: border-box;
+	font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
+	font-size: var(--vscode-font-size, 13px);
+	font-weight: var(--vscode-font-weight, normal);
+	line-height: 18px;
+	scrollbar-color: var(--vscode-scrollbarSlider-background, rgba(121, 121, 121, 0.4)) transparent;
+	scrollbar-width: thin;
 }
 
 .browser-scenario-panel-header {
-	padding: 12px 14px 10px;
-	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	padding: 10px 12px;
+	border-bottom: 1px dotted var(--browser-scenario-separator);
+	cursor: grab;
+	user-select: none;
+}
+
+.browser-scenario-panel-header:active {
+	cursor: grabbing;
+}
+
+.browser-scenario-panel-title-row {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+}
+
+.browser-scenario-panel-actions {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 4px;
 }
 
 .browser-scenario-panel-title {
@@ -1304,7 +1335,7 @@
 
 .browser-scenario-error,
 .browser-scenario-cleanup-status {
-	margin: 10px 14px 0;
+	margin: 12px 16px 0;
 	padding: 8px 10px;
 	font-size: 12px;
 	line-height: 17px;
@@ -1313,69 +1344,123 @@
 	border-radius: 4px;
 }
 
-.browser-scenario-starter {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 10px;
-	margin: 10px 14px 0;
-	padding: 8px 10px;
-	font-size: 12px;
-	line-height: 17px;
-	background: var(--vscode-editor-inactiveSelectionBackground);
-	border-radius: 4px;
+.browser-scenario-group {
+	padding: 10px 12px 4px;
 }
 
-.browser-scenario-starter-text {
-	min-width: 0;
+.browser-scenario-group + .browser-scenario-group {
+	border-top: 1px dotted var(--browser-scenario-separator);
 }
 
-.browser-scenario-default-row {
+.browser-scenario-group.drag-target {
+	background: color-mix(in srgb, var(--vscode-focusBorder, #007FD4) 10%, transparent);
+}
+
+.browser-scenario-group-header {
 	display: flex;
 	align-items: center;
 	justify-content: space-between;
 	gap: 8px;
-	margin: 10px 14px 0;
-	padding-bottom: 10px;
-	font-size: 12px;
-	border-bottom: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	margin-bottom: 8px;
 }
 
-.browser-scenario-default-label {
-	color: var(--vscode-descriptionForeground);
+.browser-scenario-group-actions {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 4px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 80ms ease;
 }
 
-.browser-scenario-default-value {
-	font-weight: 600;
-}
-
-.browser-scenario-group {
-	padding: 12px 14px 0;
+.browser-scenario-group:hover .browser-scenario-group-actions,
+.browser-scenario-group:focus-within .browser-scenario-group-actions {
+	opacity: 1;
+	pointer-events: auto;
 }
 
 .browser-scenario-group-title {
-	margin: 0 0 8px;
+	margin: 0;
 	font-size: 12px;
 	font-weight: 600;
 	line-height: 16px;
 	color: var(--vscode-foreground);
 }
 
+.browser-scenario-empty-group {
+	margin: 2px 0 8px;
+	color: var(--vscode-descriptionForeground);
+	font-size: 12px;
+}
+
 .browser-scenario-control {
 	display: grid;
-	grid-template-columns: minmax(96px, 1fr) minmax(0, 1.6fr);
-	align-items: center;
-	gap: 10px;
+	gap: 6px;
 	margin-bottom: 10px;
+	padding: 2px 0;
+}
+
+.browser-scenario-control.choice {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.browser-scenario-control.multi-choice {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.browser-scenario-control.toggle {
+	grid-template-columns: minmax(0, 1fr) 42px;
+	align-items: center;
+}
+
+.browser-scenario-control.dragging {
+	opacity: 0.55;
 }
 
 .browser-scenario-control-label {
 	display: flex;
-	flex-direction: column;
-	gap: 3px;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
 	min-width: 0;
 	font-size: 12px;
 	line-height: 16px;
+}
+
+.browser-scenario-control-name {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.browser-scenario-drag-handle {
+	color: var(--vscode-descriptionForeground);
+	cursor: grab;
+	opacity: 0;
+	transition: opacity 80ms ease;
+}
+
+.browser-scenario-control-actions {
+	display: inline-flex;
+	flex: none;
+	align-items: center;
+	gap: 6px;
+	opacity: 0;
+	pointer-events: none;
+	transition: opacity 80ms ease;
+}
+
+.browser-scenario-control:hover .browser-scenario-drag-handle,
+.browser-scenario-control:focus-within .browser-scenario-drag-handle,
+.browser-scenario-control:hover .browser-scenario-control-actions,
+.browser-scenario-control:focus-within .browser-scenario-control-actions {
+	opacity: 1;
+	pointer-events: auto;
 }
 
 .browser-scenario-support {
@@ -1392,6 +1477,10 @@
 	background: var(--vscode-editor-inactiveSelectionBackground);
 }
 
+.browser-scenario-support.unknown {
+	display: none;
+}
+
 .browser-scenario-support.supported {
 	color: var(--vscode-testing-iconPassed);
 	background: transparent;
@@ -1403,56 +1492,240 @@
 	background: transparent;
 }
 
-.browser-scenario-segments {
-	display: grid;
-	grid-auto-flow: column;
-	grid-auto-columns: minmax(0, 1fr);
-	border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-	border-radius: 4px;
-	overflow: hidden;
-}
-
 .browser-scenario-text-button {
-	height: 26px;
+	min-height: 26px;
 	padding: 0 9px;
-	font-family: inherit;
+	font: inherit;
 	font-size: 12px;
 	line-height: 24px;
-	color: var(--vscode-button-secondaryForeground);
-	background: var(--vscode-button-secondaryBackground);
-	border: 0;
+	color: var(--vscode-button-secondaryForeground, var(--vscode-foreground, #D4D4D4));
+	background: transparent;
+	border: 1px solid transparent;
 	border-radius: 4px;
 	cursor: pointer;
 }
 
 .browser-scenario-text-button:hover {
-	background: var(--vscode-button-secondaryHoverBackground);
+	background: color-mix(in srgb, var(--vscode-macos-vibrant-surface-background, rgba(255, 255, 255, 0.08)) 78%, white 22%);
+}
+
+.browser-scenario-text-button:disabled {
+	color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+	background: transparent;
+	cursor: default;
+	opacity: 0.7;
 }
 
 .browser-scenario-text-button.primary,
-.browser-scenario-segment.checked {
-	color: var(--vscode-button-foreground);
-	background: var(--vscode-button-background);
+.browser-scenario-value-summary.custom,
+.browser-scenario-value-menu-item.checked {
+	color: var(--vscode-button-foreground, #FFFFFF);
+	background: var(--vscode-button-background, #0000FF);
+	border-color: var(--vscode-button-background, #0000FF);
 }
 
-.browser-scenario-segment {
+.browser-scenario-value-dropdown {
+	position: relative;
 	min-width: 0;
-	border-radius: 0;
+}
+
+.browser-scenario-value-summary {
+	display: flex;
+	align-items: center;
+	min-height: 26px;
+	padding: 0 8px;
+	color: var(--vscode-dropdown-foreground, #D4D4D4);
+	background: transparent;
+	border: 1px solid var(--vscode-widget-border, var(--vscode-dropdown-border, rgba(255, 255, 255, 0.16)));
+	border-radius: 4px;
+	box-sizing: border-box;
+	cursor: pointer;
+	list-style: none;
+}
+
+.browser-scenario-value-summary:not(.custom):hover {
+	background: color-mix(in srgb, var(--vscode-macos-vibrant-surface-background, rgba(255, 255, 255, 0.08)) 78%, white 22%);
+}
+
+.browser-scenario-value-summary::-webkit-details-marker {
+	display: none;
+}
+
+.browser-scenario-value-summary::after {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	margin-left: auto;
+	border-right: 1.5px solid currentColor;
+	border-bottom: 1.5px solid currentColor;
+	content: '';
+	opacity: 0.85;
+	transform: translateY(-1px) rotate(45deg);
+}
+
+.browser-scenario-value-summary-text {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 
-.browser-scenario-segment + .browser-scenario-segment {
-	border-left: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
+.browser-scenario-value-menu {
+	position: absolute;
+	z-index: 1;
+	top: calc(100% + 3px);
+	left: 0;
+	right: 0;
+	display: none;
+	flex-direction: column;
+	gap: 1px;
+	max-height: 180px;
+	padding: 3px;
+	overflow: auto;
+	color: var(--vscode-dropdown-foreground, #D4D4D4);
+	background: color-mix(in srgb, var(--vscode-dropdown-background, #191A1B) 92%, var(--vscode-macos-vibrant-surface-background, #191A1B) 8%);
+	border: 1px solid var(--vscode-widget-border, var(--vscode-dropdown-border, rgba(255, 255, 255, 0.16)));
+	border-radius: 4px;
+	box-shadow: 0 8px 18px rgba(0, 0, 0, 0.34);
+	box-sizing: border-box;
+}
+
+.browser-scenario-value-dropdown[open] .browser-scenario-value-menu {
+	display: flex;
+}
+
+.browser-scenario-value-menu-row {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 4px;
+	border-radius: 4px;
+}
+
+.browser-scenario-value-menu-row:hover {
+	background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.browser-scenario-value-menu-item {
+	width: 100%;
+	min-height: 24px;
+	padding: 0 6px;
+	line-height: 22px;
+	text-align: left;
+}
+
+.browser-scenario-value-menu-row:hover .browser-scenario-value-menu-item:not(.checked) {
+	background: transparent;
+}
+
+.browser-scenario-control-default {
+	min-height: 20px;
+	padding: 0 7px;
+	font-size: 11px;
+	line-height: 18px;
+}
+
+.browser-scenario-add-value {
+	width: 100%;
+	min-height: 24px;
+	padding: 0 6px;
+	font-size: 11px;
+	line-height: 22px;
+	text-align: left;
+	color: var(--vscode-descriptionForeground);
+}
+
+.browser-scenario-value-menu-footer {
+	margin-top: 3px;
+	padding-top: 3px;
+	border-top: 1px dotted var(--browser-scenario-separator);
+}
+
+.browser-scenario-value-remove {
+	min-height: 20px;
+	padding: 0 6px;
+	font-size: 11px;
+	line-height: 18px;
+	color: var(--vscode-descriptionForeground);
+	opacity: 0;
+}
+
+.browser-scenario-value-menu-row:hover .browser-scenario-value-remove,
+.browser-scenario-value-menu-row:focus-within .browser-scenario-value-remove {
+	opacity: 1;
+}
+
+.browser-scenario-icon-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 22px;
+	height: 22px;
+	padding: 0;
+	color: var(--vscode-icon-foreground);
+	background: transparent;
+	border: 1px solid transparent;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.browser-scenario-icon-button:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.browser-scenario-icon-button .codicon {
+	font-size: 14px;
+	line-height: 1;
+}
+
+.browser-scenario-icon-button:disabled {
+	color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+	background: transparent;
+	cursor: default;
+	opacity: 0.55;
+}
+
+.browser-scenario-inline-form {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	gap: 6px;
+	margin: 6px 0 10px;
+}
+
+.browser-scenario-inline-form:has(.browser-scenario-inline-select) {
+	grid-template-columns: minmax(0, 1fr) minmax(112px, auto) auto auto;
+}
+
+.browser-scenario-value-menu-footer .browser-scenario-inline-form {
+	grid-template-columns: minmax(0, 1fr) auto auto;
+	margin: 2px 0 0;
+}
+
+.browser-scenario-inline-input,
+.browser-scenario-inline-select {
+	min-width: 0;
+	height: 26px;
+	padding: 0 7px;
+	color: var(--vscode-input-foreground, var(--vscode-foreground));
+	background: var(--vscode-input-background, transparent);
+	border: 1px dotted var(--vscode-widget-border, var(--vscode-panel-border, rgba(255, 255, 255, 0.16)));
+	border-radius: 4px;
+	font: inherit;
+	outline: 0;
+}
+
+.browser-scenario-inline-input:focus,
+.browser-scenario-inline-select:focus {
+	border-style: solid;
+	border-color: var(--vscode-focusBorder, #007FD4);
 }
 
 .browser-scenario-switch {
 	position: relative;
 	display: inline-flex;
 	justify-self: end;
-	width: 38px;
-	height: 20px;
+	width: 36px;
+	height: 18px;
 }
 
 .browser-scenario-switch input {
@@ -1463,36 +1736,41 @@
 .browser-scenario-switch-track {
 	position: absolute;
 	inset: 0;
-	background: var(--vscode-button-secondaryBackground);
+	box-sizing: border-box;
+	background: transparent;
+	border: 1px dotted var(--browser-scenario-toggle-border);
 	border-radius: 999px;
 	cursor: pointer;
 }
 
 .browser-scenario-switch-track::after {
 	position: absolute;
-	top: 3px;
+	top: 50%;
 	left: 3px;
-	width: 14px;
-	height: 14px;
+	width: 12px;
+	height: 12px;
 	content: '';
-	background: var(--vscode-button-secondaryForeground);
+	background: var(--vscode-button-secondaryForeground, var(--vscode-foreground, #D4D4D4));
 	border-radius: 50%;
+	transform: translateY(-50%);
 	transition: transform 80ms ease;
 }
 
 .browser-scenario-switch input:checked + .browser-scenario-switch-track {
-	background: var(--vscode-button-background);
+	background: var(--vscode-button-background, #0000FF);
+	border-color: var(--vscode-button-background, #0000FF);
+	border-style: solid;
 }
 
 .browser-scenario-switch input:checked + .browser-scenario-switch-track::after {
-	transform: translateX(18px);
-	background: var(--vscode-button-foreground);
+	transform: translate(17px, -50%);
+	background: var(--vscode-button-foreground, #FFFFFF);
 }
 
 .browser-scenario-footer {
 	display: flex;
 	justify-content: flex-end;
 	gap: 8px;
-	padding: 12px 14px 14px;
-	border-top: 1px solid var(--vscode-editorWidget-border, var(--vscode-panel-border));
+	padding: 10px 12px 12px;
+	border-top: 1px dotted var(--browser-scenario-separator);
 }

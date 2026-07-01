@@ -9,7 +9,7 @@ import { Emitter } from '../../../../base/common/event.js';
 import { getErrorMessage } from '../../../../base/common/errors.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { localize } from '../../../../nls.js';
 
@@ -48,8 +48,13 @@ interface DesignerBranchState {
 	readonly cloudProblem?: DesignerCloudProblem;
 	readonly syncState: 'synced' | 'syncing' | 'problem';
 	readonly repositoryReady?: boolean;
+	readonly setup?: DesignerBranchSetup;
 	readonly branches: readonly DesignerBranchItem[];
 	readonly tree: readonly DesignerBranchTreeNode[];
+}
+
+interface DesignerBranchSetup {
+	readonly reason: 'notGitRepository';
 }
 
 type DesignerSyncState = 'idle' | 'saving' | 'pushing' | 'synced' | 'blocked' | 'problem';
@@ -119,7 +124,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	private state: DesignerBranchState | undefined;
 	private repoState: DesignerRepoState | undefined;
 	private filterInput: HTMLInputElement | undefined;
-	private repoUrlInput: HTMLInputElement | undefined;
+	private repoSourceInput: HTMLInputElement | undefined;
 	private treeElement: HTMLElement | undefined;
 	private problemMessage: string | undefined;
 	private repoProblemMessage: string | undefined;
@@ -133,7 +138,9 @@ export class DesignerBranchSwitcher extends Disposable {
 	private switchingRepoPath: string | undefined;
 	private activeSyncState: DesignerSyncState | undefined;
 	private removingRepoPath: string | undefined;
-	private cloningRepoUrl: string | undefined;
+	private addingRepoSource: string | undefined;
+	private repoSourceDraft = '';
+	private pickingRepoFolder = false;
 	private projectAccessLimited = false;
 	private treeRenderDeferred = false;
 	private refreshPromise: Promise<void> | undefined;
@@ -149,7 +156,8 @@ export class DesignerBranchSwitcher extends Disposable {
 		parent: HTMLElement,
 		@ICommandService private readonly commandService: ICommandService,
 		@IDialogService private readonly dialogService: IDialogService,
-		@IWorkspaceTrustRequestService private readonly workspaceTrustRequestService: IWorkspaceTrustRequestService
+		@IWorkspaceTrustRequestService private readonly workspaceTrustRequestService: IWorkspaceTrustRequestService,
+		@IFileDialogService private readonly fileDialogService: IFileDialogService
 	) {
 		super();
 
@@ -219,7 +227,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		}
 
 		this.render();
-		this.focusRepoUrlInput();
+		this.focusRepoSourceInput();
 	}
 
 	private deferTreeRender(): void {
@@ -249,14 +257,14 @@ export class DesignerBranchSwitcher extends Disposable {
 		});
 	}
 
-	private focusRepoUrlInput(): void {
+	private focusRepoSourceInput(): void {
 		if (this.dropdownMode !== 'repo') {
 			return;
 		}
 
 		getWindow(this.container).requestAnimationFrame(() => {
-			this.repoUrlInput?.focus({ preventScroll: true });
-			this.repoUrlInput?.setSelectionRange(this.repoUrlInput.value.length, this.repoUrlInput.value.length);
+			this.repoSourceInput?.focus({ preventScroll: true });
+			this.repoSourceInput?.setSelectionRange(this.repoSourceInput.value.length, this.repoSourceInput.value.length);
 		});
 	}
 
@@ -277,7 +285,11 @@ export class DesignerBranchSwitcher extends Disposable {
 			}
 		}));
 
-		this.windowDisposables.add(addDisposableListener(targetWindow, EventType.BLUR, () => this.closeDropdown()));
+		this.windowDisposables.add(addDisposableListener(targetWindow, EventType.BLUR, () => {
+			if (!this.pickingRepoFolder) {
+				this.closeDropdown();
+			}
+		}));
 	}
 
 	private closeDropdown(): void {
@@ -340,7 +352,7 @@ export class DesignerBranchSwitcher extends Disposable {
 				this.repoRefreshPromise = undefined;
 				this.refreshingRepos = false;
 				this.render();
-				this.focusRepoUrlInput();
+				this.focusRepoSourceInput();
 			});
 	}
 
@@ -352,7 +364,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	private async doRefresh(options: { updateRemotes?: boolean; retryDuringStartup?: boolean }): Promise<void> {
 		this.state = await this.commandService.executeCommand<DesignerBranchState>('_designerBranches.getState', { updateRemotes: options.updateRemotes === true });
 		this.projectAccessLimited = false;
-		if (this.state?.repositoryReady === false) {
+		if (this.state?.repositoryReady === false && !this.state.setup) {
 			this.scheduleStartupRefreshRetry(options);
 			return;
 		}
@@ -402,7 +414,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.renderDisposables.clear();
 		this.treeDisposables.clear();
 		this.filterInput = undefined;
-		this.repoUrlInput = undefined;
+		this.repoSourceInput = undefined;
 		this.treeElement = undefined;
 		this.repoButton.replaceChildren();
 		this.branchButton.replaceChildren();
@@ -444,6 +456,11 @@ export class DesignerBranchSwitcher extends Disposable {
 				$('.designer-branch-switcher__empty', undefined, localize('designerBranchSwitcherLoading', "Loading branches...")),
 				this.renderNewBranch()
 			);
+			return;
+		}
+
+		if (this.state?.setup) {
+			this.dropdown.append(this.renderBranchSetup(this.state.setup));
 			return;
 		}
 
@@ -560,6 +577,10 @@ export class DesignerBranchSwitcher extends Disposable {
 			return localize('designerBranchSwitcherSavingLabel', "Saving...");
 		}
 
+		if (this.state?.setup?.reason === 'notGitRepository') {
+			return localize('designerBranchSwitcherConnectRepoLabel', "Connect repo");
+		}
+
 		if (this.isLoadingBranchInformation()) {
 			return localize('designerBranchSwitcherLoadingBranchInformation', "Loading branch information...");
 		}
@@ -590,7 +611,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private isLoadingBranchInformation(): boolean {
-		return this.refreshingBranches || this.state?.repositoryReady === false || (!this.state?.currentBranch && !this.state?.defaultBranch && this.state?.syncState === 'syncing');
+		return this.refreshingBranches || (this.state?.repositoryReady === false && !this.state.setup) || (!this.state?.currentBranch && !this.state?.defaultBranch && this.state?.syncState === 'syncing');
 	}
 
 	private renderProblem(message: string): HTMLElement {
@@ -714,6 +735,45 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.refreshRepos();
 	}
 
+	private renderBranchSetup(setup: DesignerBranchSetup): HTMLElement {
+		const container = $('.designer-branch-switcher__setup');
+		const message = setup.reason === 'notGitRepository'
+			? localize('designerBranchSwitcherNotGitRepository', "This folder is not connected to a remote repo yet.")
+			: localize('designerBranchSwitcherSetupRequired', "This folder needs setup before branches are available.");
+
+		container.append(
+			$('span.codicon.codicon-repo.designer-branch-switcher__setup-icon'),
+			$('span.designer-branch-switcher__setup-message', undefined, message)
+		);
+
+		const connect = document.createElement('button');
+		connect.className = 'designer-branch-switcher__setup-action designer-branch-switcher__setup-action--connect';
+		connect.type = 'button';
+		connect.textContent = localize('designerBranchSwitcherConnectRemoteRepo', "Connect to Remote Repo");
+		this.renderDisposables.add(addDisposableListener(connect, EventType.CLICK, () => this.connectCurrentFolderToRemote()));
+		container.append(connect);
+
+		return container;
+	}
+
+	private async connectCurrentFolderToRemote(): Promise<void> {
+		this.problemMessage = undefined;
+		this.render();
+
+		try {
+			const state = await this.commandService.executeCommand<DesignerBranchState>('_designerRepos.connectCurrentFolderToRemote');
+			if (state) {
+				this.updateBranchState(state);
+			} else {
+				this.refresh({ retryDuringStartup: true });
+			}
+			this.refreshRepos();
+		} catch (error) {
+			this.problemMessage = getErrorMessage(error);
+			this.render();
+		}
+	}
+
 	private renderTree(): HTMLElement {
 		const tree = $('.designer-branch-switcher__tree');
 		tree.setAttribute('role', 'menu');
@@ -771,13 +831,13 @@ export class DesignerBranchSwitcher extends Disposable {
 			list.append(this.renderRepoRow(repo));
 		}
 
-		if (this.cloningRepoUrl) {
+		if (this.addingRepoSource) {
 			const cloningRow = this.renderRepoRow({
-				name: this.getRepoNameFromUrl(this.cloningRepoUrl),
+				name: this.getRepoNameFromSource(this.addingRepoSource),
 				path: '',
 				status: 'cloning',
 				isCurrent: false,
-				url: this.cloningRepoUrl
+				url: this.addingRepoSource
 			});
 			list.append(cloningRow);
 		}
@@ -874,10 +934,10 @@ export class DesignerBranchSwitcher extends Disposable {
 		input.setAttribute('aria-label', localize('designerBranchSwitcherFilterAria', "Search branches"));
 		this.filterInput = input;
 
-			this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
-				this.branchFilter = input.value;
-				this.updateRenderedTree();
-			}));
+		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.branchFilter = input.value;
+			this.updateRenderedTree();
+		}));
 
 		wrapper.append(input);
 		return wrapper;
@@ -1204,7 +1264,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		} finally {
 			this.removingRepoPath = undefined;
 			this.render();
-			this.focusRepoUrlInput();
+			this.focusRepoSourceInput();
 		}
 	}
 
@@ -1289,7 +1349,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private isBusy(): boolean {
-		return this.refreshingBranches || this.refreshingRepos || !!this.switchingBranchName || !!this.switchingRepoPath || !!this.removingRepoPath || !!this.cloningRepoUrl;
+		return this.refreshingBranches || this.refreshingRepos || !!this.switchingBranchName || !!this.switchingRepoPath || !!this.removingRepoPath || !!this.addingRepoSource || this.pickingRepoFolder;
 	}
 
 	private getBranchName(input: string): string {
@@ -1316,12 +1376,21 @@ export class DesignerBranchSwitcher extends Disposable {
 		const form = document.createElement('form');
 		form.className = 'designer-branch-switcher__repo-add-form';
 
+		const chooseFolder = document.createElement('button');
+		chooseFolder.className = 'designer-branch-switcher__repo-source-folder';
+		chooseFolder.type = 'button';
+		chooseFolder.title = localize('designerRepoSwitcherChooseLocalFolderTitle', "Choose Local Folder");
+		chooseFolder.setAttribute('aria-label', localize('designerRepoSwitcherChooseLocalFolderAria', "Choose Local Folder"));
+		chooseFolder.disabled = this.isBusy();
+		chooseFolder.append($('span.codicon.codicon-folder'));
+
 		const input = document.createElement('input');
-		input.className = 'designer-branch-switcher__repo-url-input';
+		input.className = 'designer-branch-switcher__repo-source-input';
 		input.type = 'text';
-		input.placeholder = localize('designerRepoSwitcherUrlPlaceholder', "Paste repo URL");
-		input.setAttribute('aria-label', localize('designerRepoSwitcherUrlAria', "Repository URL"));
-		this.repoUrlInput = input;
+		input.value = this.repoSourceDraft;
+		input.placeholder = localize('designerRepoSwitcherSourcePlaceholder', "Add repo URL or local folder");
+		input.setAttribute('aria-label', localize('designerRepoSwitcherSourceAria', "Repo URL or Local Folder Path"));
+		this.repoSourceInput = input;
 
 		const add = document.createElement('button');
 		add.className = 'designer-branch-switcher__repo-add';
@@ -1332,46 +1401,101 @@ export class DesignerBranchSwitcher extends Disposable {
 			$('span', undefined, localize('designerRepoSwitcherAdd', "Add"))
 		);
 
-		form.append(input, add);
+		form.append(chooseFolder, input, add);
 
 		const updateAddButtonState = () => {
-			add.disabled = !input.value.trim() || !!this.cloningRepoUrl;
+			add.disabled = !input.value.trim() || !!this.addingRepoSource || this.pickingRepoFolder;
 		};
 
-		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, updateAddButtonState));
+		this.renderDisposables.add(addDisposableListener(chooseFolder, EventType.CLICK, () => this.pickRepoSourceFolder(updateAddButtonState)));
+		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.repoSourceDraft = input.value;
+			if (this.repoProblemMessage) {
+				this.repoProblemMessage = undefined;
+				this.render();
+				this.focusRepoSourceInput();
+				return;
+			}
+
+			updateAddButtonState();
+		}));
 		updateAddButtonState();
 
 		this.renderDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
 			event.preventDefault();
-			const repoUrl = input.value.trim();
-			if (!repoUrl || add.disabled) {
+			const source = input.value.trim();
+			if (!source || add.disabled) {
 				return;
 			}
-			this.cloneRepo(repoUrl);
+			this.addRepoSource(source);
 		}));
 
 		return form;
 	}
 
-	private async cloneRepo(url: string): Promise<void> {
-		this.cloningRepoUrl = url;
+	private async pickRepoSourceFolder(updateAddButtonState: () => void): Promise<void> {
+		this.pickingRepoFolder = true;
+		let selectedPath: string | undefined;
+		let problem: string | undefined;
+
+		try {
+			const folders = await this.fileDialogService.showOpenDialog({
+				canSelectFiles: false,
+				canSelectFolders: true,
+				canSelectMany: false,
+				openLabel: localize('designerRepoSwitcherChooseFolderOpenLabel', "Choose Folder"),
+				title: localize('designerRepoSwitcherChooseFolderTitle', "Choose Local Folder")
+			});
+			const folder = folders?.[0];
+			if (folder) {
+				selectedPath = folder.fsPath;
+			}
+		} catch (error) {
+			problem = getErrorMessage(error);
+		} finally {
+			this.pickingRepoFolder = false;
+		}
+
+		if (problem) {
+			this.repoProblemMessage = problem;
+			this.render();
+			this.focusRepoSourceInput();
+			return;
+		}
+
+		if (selectedPath) {
+			this.repoSourceDraft = selectedPath;
+			this.repoProblemMessage = undefined;
+			this.render();
+			this.focusRepoSourceInput();
+			return;
+		}
+
+		updateAddButtonState();
+		this.focusRepoSourceInput();
+	}
+
+	private async addRepoSource(source: string): Promise<void> {
+		this.addingRepoSource = source;
+		this.repoSourceDraft = source;
 		this.repoProblemMessage = undefined;
 		this.render();
 
 		try {
-			const cloneState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.clone', { url });
-			this.repoState = cloneState ? this.mergeRepoState(this.repoState, cloneState) : cloneState;
+			const nextState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.addSource', { source });
+			this.repoState = nextState ? this.mergeRepoState(this.repoState, nextState) : nextState;
+			this.repoSourceDraft = '';
 		} catch (error) {
 			this.repoProblemMessage = getErrorMessage(error);
 		} finally {
-			this.cloningRepoUrl = undefined;
+			this.addingRepoSource = undefined;
 			this.render();
-			this.focusRepoUrlInput();
+			this.focusRepoSourceInput();
 		}
 	}
 
-	private getRepoNameFromUrl(url: string): string {
-		const trimmed = url.trim().replace(/\/+$/, '').replace(/\.git$/, '');
+	private getRepoNameFromSource(source: string): string {
+		const trimmed = source.trim().replace(/[/\\]+$/, '').replace(/\.git$/, '');
 		const lastSegment = trimmed.split(/[/:]/).filter(Boolean).pop();
 		if (!lastSegment) {
 			return localize('designerRepoSwitcherUnknownRepo', "New repo");

@@ -22,7 +22,7 @@ import { getRemoteSourceActions, pickRemoteSource } from './remoteSource';
 import { RemoteSourceAction } from './typings/git-base';
 import { CloneManager } from './cloneManager';
 import { buildDesignerBranchTree, mergeDesignerBranchRefs } from './designerBranchModel';
-import { DesignerKnownRepo, getDesignerRepoLabel, mergeDesignerKnownRepos } from './designerRepoModel';
+import { DesignerKnownRepo, getDesignerRepoLabel, mergeDesignerKnownRepos, parseDesignerRepoSource } from './designerRepoModel';
 import { isDesignerHostRepository } from './designerHostRepository';
 import { DesignerBranchCheckoutResult, DesignerBranchRef, DesignerBranchState, DesignerRepoItem, DesignerRepoRemoveResult, DesignerRepoState, DesignerRepoSwitchResult, DesignerSyncBlockedReason, DesignerSyncStatus } from './designerBranchTypes';
 import { getDesignerWorkspaceRepository as findDesignerWorkspaceRepository } from './designerWorkspaceRepository';
@@ -2854,7 +2854,7 @@ export class CommandCenter {
 	async getDesignerBranchesState(options?: { updateRemotes?: boolean }): Promise<DesignerBranchState> {
 		const repository = await this.getDesignerWorkspaceRepository();
 		if (!repository) {
-			return this.getDesignerLoadingBranchState();
+			return this.getDesignerUnavailableBranchState();
 		}
 
 		if (options?.updateRemotes) {
@@ -3321,10 +3321,94 @@ export class CommandCenter {
 			throw new Error(l10n.t('Paste a repository URL.'));
 		}
 
+		return this.addDesignerRemoteRepo(url);
+	}
+
+	@command('_designerRepos.addSource')
+	async addDesignerRepoSource(options?: { source?: string }): Promise<DesignerRepoState> {
+		const source = options?.source?.trim();
+		if (!source) {
+			throw new Error(l10n.t('Enter a repo URL or local folder path.'));
+		}
+
+		const parsed = parseDesignerRepoSource(source);
+		if (parsed.kind === 'remote') {
+			return this.addDesignerRemoteRepo(parsed.url);
+		}
+
+		return this.addDesignerLocalRepo(parsed.path);
+	}
+
+	@command('_designerRepos.connectCurrentFolderToRemote')
+	async connectCurrentDesignerFolderToRemote(options?: { url?: string }): Promise<DesignerBranchState | undefined> {
+		const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath;
+		if (!workspaceRoot) {
+			throw new Error(l10n.t('Open a folder before connecting a remote repo.'));
+		}
+
+		const url = await this.getDesignerRemoteUrlInput(options?.url);
+		if (!url) {
+			return undefined;
+		}
+
+		const config = workspace.getConfiguration('git');
+		const defaultBranchName = config.get<string>('defaultBranchName', 'main');
+		const branchWhitespaceChar = config.get<string>('branchWhitespaceChar', '-');
+		await this.git.init(workspaceRoot, { defaultBranch: sanitizeBranchName(defaultBranchName, branchWhitespaceChar) });
+
+		const dotGit = await this.git.getRepositoryDotGit(workspaceRoot);
+		const gitRepository = new GitRepository(this.git, workspaceRoot, undefined, dotGit, this.logger);
+		await gitRepository.addRemote('origin', url);
+		await gitRepository.fetch({ remote: 'origin' });
+
+		const knownRepo = {
+			path: workspaceRoot,
+			name: getDesignerRepoLabel(workspaceRoot),
+			url
+		};
+		await this.storeDesignerKnownRepo(knownRepo);
+		await commands.executeCommand('_designerWorkspaceTrust.trustFolder', knownRepo);
+		await this.model.openRepository(workspaceRoot, true, true);
+		window.showInformationMessage(l10n.t('Connected {0} to remote repo', knownRepo.name));
+
+		return this.getDesignerBranchesState({ updateRemotes: true });
+	}
+
+	private async getDesignerRemoteUrlInput(url: string | undefined): Promise<string | undefined> {
+		if (url?.trim()) {
+			const parsed = parseDesignerRepoSource(url);
+			if (parsed.kind !== 'remote') {
+				throw new Error(l10n.t('Enter a remote repo URL.'));
+			}
+
+			return parsed.url;
+		}
+
+		const input = await window.showInputBox({
+			prompt: l10n.t('Enter the remote repo URL for this folder.'),
+			placeHolder: l10n.t('Remote repo URL'),
+			ignoreFocusOut: true,
+			validateInput: value => {
+				const trimmed = value.trim();
+				if (!trimmed) {
+					return l10n.t('Enter a remote repo URL.');
+				}
+
+				return parseDesignerRepoSource(trimmed).kind === 'remote'
+					? null
+					: l10n.t('Enter a remote repo URL.');
+			}
+		});
+
+		return input?.trim();
+	}
+
+	private async addDesignerRemoteRepo(url: string): Promise<DesignerRepoState> {
 		const existingRepo = (await this.getDesignerReposStateInternal()).repos.find(repo => repo.url === url);
 		if (existingRepo) {
 			await commands.executeCommand('_designerWorkspaceTrust.trustFolder', existingRepo);
 			await this.storeDesignerKnownRepo(existingRepo);
+			window.showInformationMessage(l10n.t('Added and opening {0}', existingRepo.name));
 			await commands.executeCommand('vscode.openFolder', Uri.file(existingRepo.path), { forceReuseWindow: true });
 			return this.getDesignerReposStateInternal({
 				path: existingRepo.path,
@@ -3348,6 +3432,39 @@ export class CommandCenter {
 		};
 		await commands.executeCommand('_designerWorkspaceTrust.trustFolder', knownRepo);
 		await this.storeDesignerKnownRepo(knownRepo);
+		window.showInformationMessage(l10n.t('Added and opening {0}', knownRepo.name));
+		await commands.executeCommand('vscode.openFolder', Uri.file(repoPath), { forceReuseWindow: true });
+
+		return this.getDesignerReposStateInternal(knownRepo);
+	}
+
+	private async addDesignerLocalRepo(repoPath: string): Promise<DesignerRepoState> {
+		if (!path.isAbsolute(repoPath)) {
+			throw new Error(l10n.t('Enter an absolute local folder path or a repo URL.'));
+		}
+
+		let stat;
+		try {
+			stat = await workspace.fs.stat(Uri.file(repoPath));
+		} catch {
+			throw new Error(l10n.t('Folder could not be found.'));
+		}
+
+		if ((stat.type & FileType.Directory) === 0) {
+			throw new Error(l10n.t('Choose a folder, not a file.'));
+		}
+
+		if (isDesignerHostRepository(repoPath, __dirname)) {
+			throw new Error(l10n.t('This project is running the app. Open a separate project repo to switch safely.'));
+		}
+
+		const knownRepo = {
+			path: repoPath,
+			name: getDesignerRepoLabel(repoPath)
+		};
+		await this.storeDesignerKnownRepo(knownRepo);
+		await commands.executeCommand('_designerWorkspaceTrust.trustFolder', knownRepo);
+		window.showInformationMessage(l10n.t('Added and opening {0}', knownRepo.name));
 		await commands.executeCommand('vscode.openFolder', Uri.file(repoPath), { forceReuseWindow: true });
 
 		return this.getDesignerReposStateInternal(knownRepo);
@@ -3712,14 +3829,16 @@ export class CommandCenter {
 		}
 	}
 
-	private getDesignerLoadingBranchState(): DesignerBranchState {
+	private async getDesignerUnavailableBranchState(): Promise<DesignerBranchState> {
 		const workspaceRoot = workspace.workspaceFolders?.[0]?.uri.fsPath;
+		const hasGitMetadata = workspaceRoot ? await this.pathExists(path.join(workspaceRoot, '.git')) : false;
 		return {
 			projectName: workspaceRoot ? getRepositoryLabel(workspaceRoot) : l10n.t('Project'),
 			defaultBranch: undefined,
 			currentBranch: undefined,
-			syncState: 'syncing',
+			syncState: hasGitMetadata ? 'syncing' : 'problem',
 			repositoryReady: false,
+			setup: workspaceRoot && !hasGitMetadata ? { reason: 'notGitRepository' } : undefined,
 			branches: [],
 			tree: []
 		};

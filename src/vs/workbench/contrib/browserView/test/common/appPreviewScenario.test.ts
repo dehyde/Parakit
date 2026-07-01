@@ -5,20 +5,23 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { createAppPreviewScenarioBridgePayload, createAppPreviewScenarioChatContext, createDefaultAppPreviewScenarioConfig, getAppPreviewScenarioDefaultValues, getAppPreviewScenarioStorageKey, getStarterAppPreviewScenarioGroups, isAppPreviewScenarioDesignOnlyFilePath, normalizeAppPreviewScenarioState, parseAppPreviewScenarioConfig, summarizeAppPreviewScenarioState } from '../../common/appPreviewScenario.js';
+import { addAppPreviewScenarioChoice, addAppPreviewScenarioControl, addAppPreviewScenarioGroup, createAppPreviewScenarioBridgePayload, createAppPreviewScenarioChatContext, createDefaultAppPreviewScenarioConfig, getAppPreviewScenarioDefaultValues, getAppPreviewScenarioStorageKey, getStarterAppPreviewScenarioGroups, isAppPreviewScenarioDesignOnlyFilePath, moveAppPreviewScenarioControl, normalizeAppPreviewScenarioState, parseAppPreviewScenarioConfig, removeAppPreviewScenarioChoice, removeAppPreviewScenarioControl, removeAppPreviewScenarioGroup, summarizeAppPreviewScenarioState, updateAppPreviewScenarioChoiceLabel } from '../../common/appPreviewScenario.js';
 
 suite('App Preview Scenario', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	test('creates starter groups with automatic happy-path defaults', () => {
+	test('creates starter groups with automatic defaults', () => {
 		const groups = getStarterAppPreviewScenarioGroups();
 		const defaults = getAppPreviewScenarioDefaultValues(groups);
 
 		assert.deepStrictEqual(groups.map(group => group.label), ['Permissions', 'UI State', 'Content Stress', 'Concept Variant']);
+		assert.deepStrictEqual(groups[0].controls.map(control => control.label), ['Role']);
+		assert.deepStrictEqual(groups[2].controls.map(control => control.label), ['Length']);
 		assert.strictEqual(defaults['permissions.role'], 'member');
-		assert.strictEqual(defaults['permissions.billing'], false);
+		assert.strictEqual(defaults['permissions.billing'], undefined);
 		assert.strictEqual(defaults['ui.error'], false);
 		assert.strictEqual(defaults['content.length'], 'normal');
+		assert.strictEqual(defaults['content.overflow'], undefined);
 		assert.strictEqual(defaults['concept.variant'], 'a');
 
 		const config = createDefaultAppPreviewScenarioConfig(groups);
@@ -85,7 +88,79 @@ suite('App Preview Scenario', () => {
 		});
 	});
 
-	test('summarizes happy path and custom state', () => {
+	test('supports multi-select controls', () => {
+		const result = parseAppPreviewScenarioConfig({
+			version: 1,
+			groups: [{
+				id: 'content',
+				label: 'Content',
+				controls: [{
+					id: 'states',
+					label: 'States',
+					type: 'multiChoice',
+					choices: [
+						{ id: 'empty', label: 'Empty' },
+						{ id: 'long', label: 'Long' },
+					]
+				}]
+			}],
+			defaultValues: {
+				'content.states': ['empty']
+			}
+		});
+
+		assert.deepStrictEqual(result.errors, []);
+		assert.deepStrictEqual(normalizeAppPreviewScenarioState(result.config!, {
+			'content.states': ['long', 'missing']
+		}), {
+			'content.states': ['empty']
+		});
+		assert.strictEqual(summarizeAppPreviewScenarioState(result.config!, {
+			'content.states': ['empty', 'long']
+		}), 'States: Empty, Long');
+	});
+
+	test('edits groups, properties, values, and moved properties', () => {
+		let config = createDefaultAppPreviewScenarioConfig([{
+			id: 'ui',
+			label: 'UI State',
+			controls: []
+		}]);
+
+		config = addAppPreviewScenarioGroup(config, 'Concept Variant');
+		config = addAppPreviewScenarioControl(config, 'concept-variant', 'choice', 'Variant');
+		config = addAppPreviewScenarioChoice(config, 'concept-variant', 'variant', 'B');
+		config = addAppPreviewScenarioControl(config, 'ui', 'toggle', 'Disabled');
+		config = moveAppPreviewScenarioControl(config, 'concept-variant', 'variant', 'ui');
+
+		assert.deepStrictEqual(config.groups.map(group => group.id), ['ui', 'concept-variant']);
+		assert.deepStrictEqual(config.groups[0].controls.map(control => control.id), ['disabled', 'variant']);
+		assert.strictEqual(config.defaultValues['ui.disabled'], false);
+		assert.strictEqual(config.defaultValues['ui.variant'], 'option-1');
+		assert.strictEqual(config.defaultValues['concept-variant.variant'], undefined);
+
+		config = updateAppPreviewScenarioChoiceLabel(config, 'ui', 'variant', 'option-1', 'A');
+		assert.strictEqual(summarizeAppPreviewScenarioState(config, { 'ui.variant': 'b' }), 'Variant: B');
+		assert.strictEqual(summarizeAppPreviewScenarioState(config, { 'ui.variant': 'option-1' }), 'Default');
+
+		config = removeAppPreviewScenarioChoice(config, 'ui', 'variant', 'b');
+		assert.deepStrictEqual(config.groups[0].controls[1], {
+			id: 'variant',
+			label: 'Variant',
+			type: 'choice',
+			choices: [{ id: 'option-1', label: 'A' }]
+		});
+
+		config = removeAppPreviewScenarioControl(config, 'ui', 'disabled');
+		assert.deepStrictEqual(config.groups[0].controls.map(control => control.id), ['variant']);
+		assert.strictEqual(config.defaultValues['ui.disabled'], undefined);
+
+		config = removeAppPreviewScenarioGroup(config, 'ui');
+		assert.deepStrictEqual(config.groups.map(group => group.id), ['concept-variant']);
+		assert.deepStrictEqual(config.defaultValues, {});
+	});
+
+	test('summarizes default and custom state', () => {
 		const config = createDefaultAppPreviewScenarioConfig([{
 			id: 'permissions',
 			label: 'Permissions',
@@ -95,7 +170,7 @@ suite('App Preview Scenario', () => {
 			]
 		}]);
 
-		assert.strictEqual(summarizeAppPreviewScenarioState(config, config.defaultValues), 'Happy path');
+		assert.strictEqual(summarizeAppPreviewScenarioState(config, config.defaultValues), 'Default');
 		assert.strictEqual(summarizeAppPreviewScenarioState(config, {
 			'permissions.role': 'admin',
 			'permissions.billing': true,

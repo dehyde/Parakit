@@ -7,7 +7,7 @@ export const APP_PREVIEW_SCENARIOS_CONFIG_PATH = '.designer/scenarios.json';
 export const APP_PREVIEW_SCENARIO_STORAGE_PREFIX = 'workbench.appPreview.scenario';
 export const APP_PREVIEW_SCENARIO_CONFIG_VERSION = 1;
 
-export type AppPreviewScenarioControlValue = string | boolean;
+export type AppPreviewScenarioControlValue = string | boolean | readonly string[];
 export type AppPreviewScenarioSupportStatus = 'supported' | 'unsupported' | 'unknown' | string;
 
 export interface IAppPreviewScenarioChoice {
@@ -22,13 +22,21 @@ export interface IAppPreviewScenarioChoiceControl {
 	readonly choices: readonly IAppPreviewScenarioChoice[];
 }
 
+export interface IAppPreviewScenarioMultiChoiceControl {
+	readonly id: string;
+	readonly label: string;
+	readonly type: 'multiChoice';
+	readonly choices: readonly IAppPreviewScenarioChoice[];
+}
+
 export interface IAppPreviewScenarioToggleControl {
 	readonly id: string;
 	readonly label: string;
 	readonly type: 'toggle';
 }
 
-export type AppPreviewScenarioControl = IAppPreviewScenarioChoiceControl | IAppPreviewScenarioToggleControl;
+export type AppPreviewScenarioControl = IAppPreviewScenarioChoiceControl | IAppPreviewScenarioMultiChoiceControl | IAppPreviewScenarioToggleControl;
+export type AppPreviewScenarioEditableControlType = AppPreviewScenarioControl['type'];
 
 export interface IAppPreviewScenarioGroup {
 	readonly id: string;
@@ -121,7 +129,6 @@ export function getStarterAppPreviewScenarioGroups(): IAppPreviewScenarioGroup[]
 						{ id: 'admin', label: 'Admin' },
 					]
 				},
-				{ id: 'billing', label: 'Billing', type: 'toggle' },
 			]
 		},
 		{
@@ -148,7 +155,6 @@ export function getStarterAppPreviewScenarioGroups(): IAppPreviewScenarioGroup[]
 						{ id: 'empty', label: 'Empty' },
 					]
 				},
-				{ id: 'overflow', label: 'Overflow', type: 'toggle' },
 			]
 		},
 		{
@@ -180,7 +186,13 @@ export function getAppPreviewScenarioDefaultValues(groups: readonly IAppPreviewS
 	for (const group of groups) {
 		for (const control of group.controls) {
 			const key = getAppPreviewScenarioControlKey(group.id, control.id);
-			values[key] = control.type === 'choice' ? control.choices[0]?.id ?? '' : false;
+			if (control.type === 'choice') {
+				values[key] = control.choices[0]?.id ?? '';
+			} else if (control.type === 'multiChoice') {
+				values[key] = [];
+			} else {
+				values[key] = false;
+			}
 		}
 	}
 
@@ -217,7 +229,7 @@ export function createAppPreviewScenarioBridgePayload(config: IAppPreviewScenari
 
 	return {
 		version: APP_PREVIEW_SCENARIO_CONFIG_VERSION,
-		defaultValues: { ...config.defaultValues },
+		defaultValues: cloneScenarioValues(config.defaultValues),
 		values: normalized,
 		summary: summarizeAppPreviewScenarioState(config, normalized),
 		support: normalizedSupport
@@ -309,7 +321,7 @@ export function parseAppPreviewScenarioConfig(raw: unknown): IAppPreviewScenario
 				continue;
 			}
 
-			defaultValues[key] = value as AppPreviewScenarioControlValue;
+			defaultValues[key] = cloneScenarioValue(value as AppPreviewScenarioControlValue);
 		}
 	}
 
@@ -330,7 +342,7 @@ export function parseAppPreviewScenarioConfig(raw: unknown): IAppPreviewScenario
 
 export function normalizeAppPreviewScenarioState(config: IAppPreviewScenarioConfig, values: unknown): Record<string, AppPreviewScenarioControlValue> {
 	const controls = getControlMap(config.groups);
-	const normalized: Record<string, AppPreviewScenarioControlValue> = { ...config.defaultValues };
+	const normalized: Record<string, AppPreviewScenarioControlValue> = cloneScenarioValues(config.defaultValues);
 
 	if (!isRecord(values)) {
 		return normalized;
@@ -342,7 +354,7 @@ export function normalizeAppPreviewScenarioState(config: IAppPreviewScenarioConf
 			continue;
 		}
 
-		normalized[key] = value as AppPreviewScenarioControlValue;
+		normalized[key] = cloneScenarioValue(value as AppPreviewScenarioControlValue);
 	}
 
 	return normalized;
@@ -355,7 +367,7 @@ export function summarizeAppPreviewScenarioState(config: IAppPreviewScenarioConf
 	for (const group of config.groups) {
 		for (const control of group.controls) {
 			const key = getAppPreviewScenarioControlKey(group.id, control.id);
-			if (state[key] === config.defaultValues[key]) {
+			if (areAppPreviewScenarioValuesEqual(state[key], config.defaultValues[key])) {
 				continue;
 			}
 
@@ -363,11 +375,11 @@ export function summarizeAppPreviewScenarioState(config: IAppPreviewScenarioConf
 		}
 	}
 
-	return changes.length === 0 ? 'Happy path' : changes.join(', ');
+	return changes.length === 0 ? 'Default' : changes.join(', ');
 }
 
 export function isAppPreviewScenarioCustomState(config: IAppPreviewScenarioConfig, values: unknown): boolean {
-	return summarizeAppPreviewScenarioState(config, values) !== 'Happy path';
+	return summarizeAppPreviewScenarioState(config, values) !== 'Default';
 }
 
 export function isAppPreviewScenarioDesignOnlyFilePath(path: string): boolean {
@@ -376,6 +388,157 @@ export function isAppPreviewScenarioDesignOnlyFilePath(path: string): boolean {
 		&& !normalized.startsWith('/')
 		&& !normalized.includes('://')
 		&& normalized.split('/').every(part => !!part && part !== '.' && part !== '..');
+}
+
+export function areAppPreviewScenarioValuesEqual(first: AppPreviewScenarioControlValue | undefined, second: AppPreviewScenarioControlValue | undefined): boolean {
+	if (Array.isArray(first) || Array.isArray(second)) {
+		return Array.isArray(first)
+			&& Array.isArray(second)
+			&& first.length === second.length
+			&& first.every((value, index) => second[index] === value);
+	}
+
+	return first === second;
+}
+
+export function addAppPreviewScenarioGroup(config: IAppPreviewScenarioConfig, label: string): IAppPreviewScenarioConfig {
+	const groupIds = new Set(config.groups.map(group => group.id));
+	const group = {
+		id: createUniqueScenarioId(label, groupIds, 'group'),
+		label: label.trim() || 'Group',
+		controls: []
+	};
+
+	return withScenarioGroups(config, [...config.groups, group]);
+}
+
+export function removeAppPreviewScenarioGroup(config: IAppPreviewScenarioConfig, groupId: string): IAppPreviewScenarioConfig {
+	return withScenarioGroups(config, config.groups.filter(group => group.id !== groupId));
+}
+
+export function addAppPreviewScenarioControl(config: IAppPreviewScenarioConfig, groupId: string, type: AppPreviewScenarioEditableControlType, label: string): IAppPreviewScenarioConfig {
+	const groups = cloneScenarioGroups(config.groups);
+	const group = groups.find(group => group.id === groupId);
+	if (!group) {
+		return config;
+	}
+
+	const controlIds = new Set(group.controls.map(control => control.id));
+	const controlId = createUniqueScenarioId(label, controlIds, 'property');
+	const controlLabel = label.trim() || 'Property';
+	const control = createScenarioControl(controlId, controlLabel, type);
+	group.controls = [...group.controls, control];
+
+	return withScenarioGroups(config, groups);
+}
+
+export function removeAppPreviewScenarioControl(config: IAppPreviewScenarioConfig, groupId: string, controlId: string): IAppPreviewScenarioConfig {
+	const groups = cloneScenarioGroups(config.groups);
+	const group = groups.find(group => group.id === groupId);
+	if (!group) {
+		return config;
+	}
+
+	group.controls = group.controls.filter(control => control.id !== controlId);
+	return withScenarioGroups(config, groups);
+}
+
+export function addAppPreviewScenarioChoice(config: IAppPreviewScenarioConfig, groupId: string, controlId: string, label: string): IAppPreviewScenarioConfig {
+	const groups = cloneScenarioGroups(config.groups);
+	const control = findScenarioControl(groups, groupId, controlId);
+	if (!control || control.type === 'toggle') {
+		return config;
+	}
+
+	const choiceIds = new Set(control.choices.map(choice => choice.id));
+	control.choices = [
+		...control.choices,
+		{
+			id: createUniqueScenarioId(label, choiceIds, 'option'),
+			label: label.trim() || 'Option'
+		}
+	];
+
+	return withScenarioGroups(config, groups);
+}
+
+export function removeAppPreviewScenarioChoice(config: IAppPreviewScenarioConfig, groupId: string, controlId: string, choiceId: string): IAppPreviewScenarioConfig {
+	const groups = cloneScenarioGroups(config.groups);
+	const control = findScenarioControl(groups, groupId, controlId);
+	if (!control || control.type === 'toggle' || control.choices.length <= 1) {
+		return config;
+	}
+
+	const nextChoices = control.choices.filter(choice => choice.id !== choiceId);
+	if (nextChoices.length === control.choices.length) {
+		return config;
+	}
+
+	control.choices = nextChoices;
+	const key = getAppPreviewScenarioControlKey(groupId, controlId);
+	const defaultValue = config.defaultValues[key];
+	const defaultOverrides: Record<string, AppPreviewScenarioControlValue> = {};
+	if (control.type === 'choice' && defaultValue === choiceId) {
+		defaultOverrides[key] = nextChoices[0].id;
+	} else if (control.type === 'multiChoice' && Array.isArray(defaultValue)) {
+		defaultOverrides[key] = defaultValue.filter(value => value !== choiceId);
+	}
+
+	return withScenarioGroups(config, groups, defaultOverrides);
+}
+
+export function updateAppPreviewScenarioChoiceLabel(config: IAppPreviewScenarioConfig, groupId: string, controlId: string, choiceId: string, label: string): IAppPreviewScenarioConfig {
+	const nextLabel = label.trim();
+	if (!nextLabel) {
+		return config;
+	}
+
+	const groups = cloneScenarioGroups(config.groups);
+	const control = findScenarioControl(groups, groupId, controlId);
+	if (!control || control.type === 'toggle') {
+		return config;
+	}
+
+	const choice = control.choices.find(choice => choice.id === choiceId);
+	if (!choice || choice.label === nextLabel) {
+		return config;
+	}
+
+	control.choices = control.choices.map(choice => choice.id === choiceId ? { ...choice, label: nextLabel } : choice);
+	return withScenarioGroups(config, groups);
+}
+
+export function moveAppPreviewScenarioControl(config: IAppPreviewScenarioConfig, sourceGroupId: string, controlId: string, targetGroupId: string): IAppPreviewScenarioConfig {
+	if (sourceGroupId === targetGroupId) {
+		return config;
+	}
+
+	const groups = cloneScenarioGroups(config.groups);
+	const sourceGroup = groups.find(group => group.id === sourceGroupId);
+	const targetGroup = groups.find(group => group.id === targetGroupId);
+	if (!sourceGroup || !targetGroup) {
+		return config;
+	}
+
+	const control = sourceGroup.controls.find(control => control.id === controlId);
+	if (!control) {
+		return config;
+	}
+
+	sourceGroup.controls = sourceGroup.controls.filter(control => control.id !== controlId);
+	const targetIds = new Set(targetGroup.controls.map(control => control.id));
+	const movedControl = cloneScenarioControl(control);
+	movedControl.id = createUniqueScenarioId(movedControl.id, targetIds, 'property');
+	targetGroup.controls = [...targetGroup.controls, movedControl];
+
+	const oldKey = getAppPreviewScenarioControlKey(sourceGroupId, controlId);
+	const newKey = getAppPreviewScenarioControlKey(targetGroupId, movedControl.id);
+	const defaultOverrides: Record<string, AppPreviewScenarioControlValue> = {};
+	if (config.defaultValues[oldKey] !== undefined) {
+		defaultOverrides[newKey] = cloneScenarioValue(config.defaultValues[oldKey]);
+	}
+
+	return withScenarioGroups(config, groups, defaultOverrides);
 }
 
 function parseScenarioGroups(rawGroups: readonly unknown[], errors: IAppPreviewScenarioValidationError[]): IAppPreviewScenarioGroup[] {
@@ -481,12 +644,12 @@ function parseScenarioControls(groupId: string, groupIndex: number, rawControls:
 			});
 		}
 
-		if (rawControl.type === 'choice') {
+		if (rawControl.type === 'choice' || rawControl.type === 'multiChoice') {
 			const choices = parseScenarioChoices(groupIndex, controlIndex, rawControl.choices, errors);
 			controls.push({
 				id: controlId,
 				label: controlLabel,
-				type: 'choice',
+				type: rawControl.type,
 				choices
 			});
 			continue;
@@ -504,7 +667,7 @@ function parseScenarioControls(groupId: string, groupIndex: number, rawControls:
 		errors.push({
 			code: 'invalidControlType',
 			path: `groups.${groupIndex}.controls.${controlIndex}.type`,
-			message: 'Variant control type must be choice or toggle.'
+			message: 'Variant control type must be choice, multiChoice, or toggle.'
 		});
 	}
 
@@ -602,12 +765,29 @@ function getInvalidValueErrorCode(control: AppPreviewScenarioControl, value: unk
 		return typeof value === 'boolean' ? undefined : 'invalidToggleDefault';
 	}
 
+	if (control.type === 'multiChoice') {
+		return Array.isArray(value)
+			&& value.every(item => typeof item === 'string' && control.choices.some(choice => choice.id === item))
+			? undefined
+			: 'invalidChoiceDefault';
+	}
+
 	return typeof value === 'string' && control.choices.some(choice => choice.id === value) ? undefined : 'invalidChoiceDefault';
 }
 
 function formatControlValue(control: AppPreviewScenarioControl, value: AppPreviewScenarioControlValue): string {
 	if (control.type === 'toggle') {
 		return value === true ? 'on' : 'off';
+	}
+
+	if (control.type === 'multiChoice') {
+		if (!Array.isArray(value) || value.length === 0) {
+			return 'none';
+		}
+
+		return value
+			.map(value => control.choices.find(choice => choice.id === value)?.label ?? value)
+			.join(', ');
 	}
 
 	if (typeof value !== 'string') {
@@ -617,7 +797,18 @@ function formatControlValue(control: AppPreviewScenarioControl, value: AppPrevie
 	return control.choices.find(choice => choice.id === value)?.label ?? value;
 }
 
-function cloneScenarioGroups(groups: readonly IAppPreviewScenarioGroup[]): IAppPreviewScenarioGroup[] {
+type MutableScenarioControl =
+	| { id: string; label: string; type: 'choice'; choices: IAppPreviewScenarioChoice[] }
+	| { id: string; label: string; type: 'multiChoice'; choices: IAppPreviewScenarioChoice[] }
+	| { id: string; label: string; type: 'toggle' };
+
+interface IMutableScenarioGroup {
+	id: string;
+	label: string;
+	controls: MutableScenarioControl[];
+}
+
+function cloneScenarioGroups(groups: readonly IAppPreviewScenarioGroup[]): IMutableScenarioGroup[] {
 	return groups.map(group => ({
 		id: group.id,
 		label: group.label,
@@ -638,6 +829,82 @@ function cloneScenarioGroups(groups: readonly IAppPreviewScenarioGroup[]): IAppP
 			};
 		})
 	}));
+}
+
+function cloneScenarioControl(control: AppPreviewScenarioControl): MutableScenarioControl {
+	return cloneScenarioGroups([{ id: 'group', label: 'Group', controls: [control] }])[0].controls[0];
+}
+
+function cloneScenarioValue(value: AppPreviewScenarioControlValue): AppPreviewScenarioControlValue {
+	return Array.isArray(value) ? [...value] : value;
+}
+
+function cloneScenarioValues(values: Record<string, AppPreviewScenarioControlValue>): Record<string, AppPreviewScenarioControlValue> {
+	const clone: Record<string, AppPreviewScenarioControlValue> = {};
+	for (const [key, value] of Object.entries(values)) {
+		clone[key] = cloneScenarioValue(value);
+	}
+	return clone;
+}
+
+function withScenarioGroups(config: IAppPreviewScenarioConfig, groups: readonly IAppPreviewScenarioGroup[], defaultOverrides: Record<string, AppPreviewScenarioControlValue> = {}): IAppPreviewScenarioConfig {
+	const defaultValues = getAppPreviewScenarioDefaultValues(groups);
+	const controls = getControlMap(groups);
+
+	for (const [key, value] of Object.entries(config.defaultValues)) {
+		const control = controls.get(key);
+		if (control && !getInvalidValueErrorCode(control, value)) {
+			defaultValues[key] = cloneScenarioValue(value);
+		}
+	}
+
+	for (const [key, value] of Object.entries(defaultOverrides)) {
+		const control = controls.get(key);
+		if (control && !getInvalidValueErrorCode(control, value)) {
+			defaultValues[key] = cloneScenarioValue(value);
+		}
+	}
+
+	return {
+		...config,
+		groups: cloneScenarioGroups(groups),
+		defaultValues
+	};
+}
+
+function createScenarioControl(id: string, label: string, type: AppPreviewScenarioEditableControlType): MutableScenarioControl {
+	if (type === 'toggle') {
+		return { id, label, type };
+	}
+
+	return {
+		id,
+		label,
+		type,
+		choices: [{ id: 'option-1', label: 'Option 1' }]
+	};
+}
+
+function findScenarioControl(groups: readonly IMutableScenarioGroup[], groupId: string, controlId: string): MutableScenarioControl | undefined {
+	return groups.find(group => group.id === groupId)?.controls.find(control => control.id === controlId);
+}
+
+function createUniqueScenarioId(label: string, existingIds: ReadonlySet<string>, fallback: string): string {
+	const base = (label.trim() || fallback)
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '-')
+		.replace(/^-+|-+$/g, '') || fallback;
+
+	if (!existingIds.has(base)) {
+		return base;
+	}
+
+	let counter = 2;
+	while (existingIds.has(`${base}-${counter}`)) {
+		counter++;
+	}
+
+	return `${base}-${counter}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

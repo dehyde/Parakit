@@ -75,6 +75,19 @@ suite('BrowserOverlayManager', () => {
 		assert.deepStrictEqual(overlays.map(o => o.type), [BrowserOverlayType.Menu]);
 	});
 
+	test('detects app preview variants dropdown over the browser container', () => {
+		const browserContainer = addElement('browser-container', {
+			position: 'absolute', left: '250px', top: '40px', width: '300px', height: '300px'
+		});
+		addElement('browser-scenario-panel', {
+			position: 'fixed', left: '12px', top: '38px', width: '380px', height: '520px', zIndex: '100000'
+		});
+
+		const overlays = manager.getOverlappingOverlays(browserContainer);
+
+		assert.deepStrictEqual(overlays.map(o => o.type), [BrowserOverlayType.Menu]);
+	});
+
 	// Regression test for #321088: a context menu (e.g. the "Add Models"
 	// dropdown) renders a full-screen `.context-view-block` inside `.context-view`
 	// that stacks above an already-open modal. The block isn't a tracked overlay

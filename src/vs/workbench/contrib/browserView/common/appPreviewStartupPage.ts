@@ -9,6 +9,7 @@ export const WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT = 150_000;
 
 export type WorkbenchAppPreviewStartupPhase = 'starting' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'setup';
 export type WorkbenchAppPreviewStartupStageStatus = 'done' | 'current' | 'pending';
+export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy';
 
 export interface IWorkbenchAppPreviewStartupStage {
 	readonly label: string;
@@ -33,7 +34,7 @@ export interface IWorkbenchAppPreviewStartupPageState {
 	readonly cwd?: string;
 	readonly details?: readonly string[];
 	readonly agentContext?: string;
-	readonly actions?: readonly ('retry' | 'restart' | 'logs' | 'copy')[];
+	readonly actions?: readonly WorkbenchAppPreviewStartupAction[];
 }
 
 function escapeHtml(value: string | undefined): string {
@@ -68,7 +69,12 @@ export function getWorkbenchAppPreviewStartupTitle(phase: WorkbenchAppPreviewSta
 
 export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPreviewStartupPageState, startupAnimationSrc = ''): string {
 	const details = state.details?.filter(Boolean) ?? [];
-	const actions = new Set(state.actions ?? []);
+	const actions = new Set<WorkbenchAppPreviewStartupAction>();
+	for (const action of state.actions ?? []) {
+		if (action !== 'copy' || state.phase === 'slow') {
+			actions.add(action);
+		}
+	}
 	const agentContext = state.agentContext ?? '';
 	const stages = state.stages ?? [];
 	const showActivity = !!state.command && (state.phase === 'serverStarting' || state.phase === 'healthChecking' || state.phase === 'slow' || state.phase === 'failed');
@@ -81,7 +87,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		...details
 	].filter((value): value is string => !!value);
 
-	const actionButton = (action: 'retry' | 'restart' | 'logs' | 'copy', label: string): string =>
+	const actionButton = (action: WorkbenchAppPreviewStartupAction, label: string): string =>
 		actions.has(action) ? `<button type="button" data-action="${action}">${escapeHtml(label)}</button>` : '';
 	const stageIcon = (status: WorkbenchAppPreviewStartupStageStatus): string => status === 'done' ? '&#10003;' : status === 'current' ? '&bull;' : '';
 	const stageRows = stages.map(stage => `<li class="stage stage-${stage.status}">
@@ -97,32 +103,36 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>${escapeHtml(state.title)}</title>
 <style>
-	:root { color-scheme: light dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-	body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: Canvas; color: CanvasText; }
+	:root { color-scheme: light dark; --app-preview-accent: #0000ff; --app-preview-accent-hover: #0000d6; --app-preview-background: #ffffff; --app-preview-foreground: #1f1f1f; --app-preview-muted: rgba(31, 31, 31, 0.64); --app-preview-subtle: rgba(31, 31, 31, 0.48); --app-preview-border: rgba(31, 31, 31, 0.18); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
+	@media (prefers-color-scheme: dark) { :root { --app-preview-background: #1e1e1e; --app-preview-foreground: #f3f3f3; --app-preview-muted: rgba(243, 243, 243, 0.68); --app-preview-subtle: rgba(243, 243, 243, 0.5); --app-preview-border: rgba(243, 243, 243, 0.18); } }
+	body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--app-preview-background); color: var(--app-preview-foreground); font-family: inherit; font-size: 13px; }
 	main { width: min(560px, calc(100vw - 48px)); display: grid; gap: 18px; }
 	.status { display: flex; align-items: center; gap: 14px; }
 	.startup-animation { width: 54px; height: 54px; object-fit: contain; flex: 0 0 auto; }
-	.icon { width: 22px; height: 22px; display: grid; place-items: center; border: 1px solid color-mix(in srgb, CanvasText 35%, transparent); border-radius: 50%; font-size: 14px; }
-	h1 { margin: 0; font-size: 20px; font-weight: 600; letter-spacing: 0; }
-	p { margin: 0; line-height: 1.45; color: color-mix(in srgb, CanvasText 76%, transparent); }
+	.icon { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--app-preview-accent); border-radius: 50%; color: var(--app-preview-accent); font-size: 14px; font-weight: 600; }
+	h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 26px; letter-spacing: 0; }
+	p { margin: 0; line-height: 1.45; color: var(--app-preview-muted); }
 	.stages { margin: 2px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
-	.stage { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; color: color-mix(in srgb, CanvasText 55%, transparent); }
-	.stage-current { color: CanvasText; font-weight: 600; }
-	.stage-done { color: color-mix(in srgb, CanvasText 65%, transparent); }
-	.stage-pending { color: color-mix(in srgb, CanvasText 38%, transparent); }
+	.stage { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; color: var(--app-preview-subtle); }
+	.stage-current { color: var(--app-preview-foreground); font-weight: 600; }
+	.stage-current .stage-icon { color: var(--app-preview-accent); }
+	.stage-done { color: var(--app-preview-muted); }
+	.stage-done .stage-icon { color: var(--app-preview-accent); }
+	.stage-pending { color: var(--app-preview-subtle); }
 	.stage-icon { width: 20px; text-align: center; font-size: 13px; }
 	.stage-label { overflow-wrap: anywhere; }
-	.stage-elapsed { font-weight: 500; color: color-mix(in srgb, CanvasText 62%, transparent); font-variant-numeric: tabular-nums; }
-	.activity { min-height: 18px; font-size: 12px; color: color-mix(in srgb, CanvasText 60%, transparent); }
+	.stage-elapsed { font-weight: 500; color: var(--app-preview-muted); font-variant-numeric: tabular-nums; }
+	.activity { min-height: 18px; font-size: 12px; color: var(--app-preview-muted); }
 	.actions { display: flex; flex-wrap: wrap; gap: 8px; }
-	button { appearance: none; border: 1px solid color-mix(in srgb, CanvasText 28%, transparent); border-radius: 6px; background: color-mix(in srgb, CanvasText 7%, Canvas); color: CanvasText; padding: 7px 10px; font: inherit; font-size: 13px; cursor: pointer; }
-	button:hover { background: color-mix(in srgb, CanvasText 12%, Canvas); }
-	.copied { min-height: 18px; font-size: 12px; color: color-mix(in srgb, CanvasText 62%, transparent); white-space: pre-wrap; }
-	.more-info { margin-top: 8px; font-size: 12px; color: color-mix(in srgb, CanvasText 48%, transparent); }
+	button { appearance: none; border: 0; border-radius: 4px; background: var(--app-preview-accent); color: #ffffff; padding: 6px 10px; font: inherit; font-size: 13px; font-weight: 500; line-height: 18px; cursor: pointer; }
+	button:hover { background: var(--app-preview-accent-hover); }
+	button:focus-visible { outline: 1px solid var(--app-preview-accent); outline-offset: 2px; }
+	.copied { min-height: 18px; font-size: 12px; color: var(--app-preview-muted); white-space: pre-wrap; }
+	.more-info { margin-top: 8px; font-size: 12px; color: var(--app-preview-subtle); }
 	.more-info > summary { cursor: pointer; width: fit-content; list-style: none; }
 	.more-info > summary::-webkit-details-marker { display: none; }
-	.more-info > summary:hover { color: CanvasText; }
-	.caption { margin-top: 8px; color: color-mix(in srgb, CanvasText 48%, transparent); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+	.more-info > summary:hover { color: var(--app-preview-accent); }
+	.caption { margin-top: 8px; color: var(--app-preview-subtle); font-size: 12px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
 </style>
 </head>
 <body>
