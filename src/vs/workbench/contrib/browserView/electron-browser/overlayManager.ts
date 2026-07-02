@@ -18,7 +18,13 @@ export enum BrowserOverlayType {
 	Unknown = 'unknown'
 }
 
-const OVERLAY_DEFINITIONS: ReadonlyArray<{ className: string; type: BrowserOverlayType }> = [
+interface IBrowserOverlayDefinition {
+	className: string;
+	type: BrowserOverlayType;
+	pausesBrowser?: boolean;
+}
+
+const OVERLAY_DEFINITIONS: readonly IBrowserOverlayDefinition[] = [
 	{ className: 'monaco-menu-container', type: BrowserOverlayType.Menu },
 	{ className: 'action-list-submenu-panel', type: BrowserOverlayType.Menu },
 	{ className: 'quick-input-widget', type: BrowserOverlayType.QuickInput },
@@ -26,7 +32,7 @@ const OVERLAY_DEFINITIONS: ReadonlyArray<{ className: string; type: BrowserOverl
 	{ className: 'editor-widget', type: BrowserOverlayType.Hover },
 	{ className: 'suggest-details-container', type: BrowserOverlayType.Hover },
 	{ className: 'designer-branch-switcher__dropdown', type: BrowserOverlayType.Menu },
-	{ className: 'browser-scenario-panel', type: BrowserOverlayType.Menu },
+	{ className: 'browser-scenario-panel', type: BrowserOverlayType.Menu, pausesBrowser: false },
 	{ className: 'app-preview-settings-modal-block', type: BrowserOverlayType.Dialog },
 	{ className: 'monaco-dialog-modal-block', type: BrowserOverlayType.Dialog },
 	{ className: 'monaco-modal-editor-block', type: BrowserOverlayType.Dialog },
@@ -49,6 +55,7 @@ export const IBrowserOverlayManager = createDecorator<IBrowserOverlayManager>('b
 
 export interface IBrowserOverlayInfo {
 	type: BrowserOverlayType;
+	pausesBrowser: boolean;
 	rect: IDomNodePagePosition;
 }
 
@@ -91,14 +98,14 @@ export class BrowserOverlayManager extends Disposable implements IBrowserOverlay
 	}));
 	readonly onDidChangeOverlayState = this._onDidChangeOverlayState.event;
 
-	private readonly _overlayCollections = new Map<string, { type: BrowserOverlayType; collection: HTMLCollectionOf<Element> }>();
+	private readonly _overlayCollections = new Map<string, { type: BrowserOverlayType; pausesBrowser: boolean; collection: HTMLCollectionOf<Element> }>();
 	private _overlayRectangles = new WeakMap<HTMLElement, IDomNodePagePosition>();
 	private _elementObservers = new WeakMap<HTMLElement, MutationObserver>();
 	private _structuralObserver: MutationObserver;
 	private _observerIsConnected: boolean = false;
 	private _shadowRootHostCollection: HTMLCollectionOf<Element>;
 	private _shadowRootObservers = new WeakMap<ShadowRoot, MutationObserver>();
-	private _shadowRootOverlayCache = new WeakMap<ShadowRoot, Array<{ element: HTMLElement; type: BrowserOverlayType }>>();
+	private _shadowRootOverlayCache = new WeakMap<ShadowRoot, Array<{ element: HTMLElement; type: BrowserOverlayType; pausesBrowser: boolean }>>();
 
 	constructor(
 		private readonly targetWindow: CodeWindow
@@ -109,6 +116,7 @@ export class BrowserOverlayManager extends Disposable implements IBrowserOverlay
 		for (const overlayDefinition of OVERLAY_DEFINITIONS) {
 			this._overlayCollections.set(overlayDefinition.className, {
 				type: overlayDefinition.type,
+				pausesBrowser: overlayDefinition.pausesBrowser ?? true,
 				// We need dynamic collections for overlay detection, using getElementsByClassName is intentional here
 				// eslint-disable-next-line no-restricted-syntax
 				collection: this.targetWindow.document.getElementsByClassName(overlayDefinition.className)
@@ -155,11 +163,11 @@ export class BrowserOverlayManager extends Disposable implements IBrowserOverlay
 		});
 	}
 
-	private *overlays(): Iterable<{ element: HTMLElement; type: BrowserOverlayType }> {
+	private *overlays(): Iterable<{ element: HTMLElement; type: BrowserOverlayType; pausesBrowser: boolean }> {
 		// Yield overlays from main document live collections
 		for (const entry of this._overlayCollections.values()) {
 			for (const element of entry.collection) {
-				yield { element: element as HTMLElement, type: entry.type };
+				yield { element: element as HTMLElement, type: entry.type, pausesBrowser: entry.pausesBrowser };
 			}
 		}
 
@@ -176,7 +184,7 @@ export class BrowserOverlayManager extends Disposable implements IBrowserOverlay
 						// eslint-disable-next-line no-restricted-syntax
 						const elements = shadowRoot.querySelectorAll(`.${overlayDefinition.className}`);
 						for (const element of elements) {
-							cache.push({ element: element as HTMLElement, type: overlayDefinition.type });
+							cache.push({ element: element as HTMLElement, type: overlayDefinition.type, pausesBrowser: overlayDefinition.pausesBrowser ?? true });
 						}
 					}
 					this._shadowRootOverlayCache.set(shadowRoot, cache);
@@ -280,6 +288,7 @@ export class BrowserOverlayManager extends Disposable implements IBrowserOverlay
 				if (elementAtPoint && overlay.element.contains(elementAtPoint)) {
 					overlappingOverlays.push({
 						type: overlay.type,
+						pausesBrowser: overlay.pausesBrowser,
 						rect: overlayRect
 					});
 				}

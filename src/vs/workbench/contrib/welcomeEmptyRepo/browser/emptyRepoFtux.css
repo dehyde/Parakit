@@ -207,3 +207,284 @@
 .parakit-empty-repo-dialog__snooze:hover {
 	color: var(--vscode-foreground, #F3F3F3);
 }
+
+.parakit-startup-repo-picker-overlay {
+	position: fixed;
+	inset: 0;
+	z-index: 1000000;
+	display: grid;
+	place-items: center;
+	padding: 32px;
+	background: var(--vscode-editor-background, #1E1E1E);
+	box-sizing: border-box;
+}
+
+.parakit-startup-repo-picker {
+	position: relative;
+	display: grid;
+	gap: 16px;
+	width: min(860px, 100%);
+	max-height: min(680px, calc(100vh - 64px));
+	padding: 28px;
+	color: var(--vscode-foreground, #F3F3F3);
+	background: var(--vscode-sideBar-background, var(--vscode-editorWidget-background, #252526));
+	border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.16));
+	border-radius: 8px;
+	box-shadow:
+		0 28px 72px rgba(0, 0, 0, 0.42),
+		0 10px 28px rgba(0, 0, 0, 0.30);
+	box-sizing: border-box;
+	font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif);
+	font-size: var(--vscode-font-size, 13px);
+	line-height: 18px;
+}
+
+.parakit-startup-repo-picker__close,
+.parakit-startup-repo-picker__back {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 28px;
+	height: 28px;
+	padding: 0;
+	color: var(--vscode-icon-foreground, #C5C5C5);
+	background: transparent;
+	border: 0;
+	border-radius: 4px;
+	cursor: pointer;
+}
+
+.parakit-startup-repo-picker__close {
+	position: absolute;
+	top: 10px;
+	right: 10px;
+}
+
+.parakit-startup-repo-picker__close:hover,
+.parakit-startup-repo-picker__back:hover {
+	background: var(--vscode-toolbar-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.parakit-startup-repo-picker__close:focus-visible,
+.parakit-startup-repo-picker__back:focus-visible,
+.parakit-startup-repo-picker__repo-card:focus-visible,
+.parakit-startup-repo-picker__branch-row:focus-visible {
+	outline: 1px solid var(--vscode-focusBorder, #0000ff);
+	outline-offset: 2px;
+}
+
+.parakit-startup-repo-picker__header {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding-right: 24px;
+}
+
+.parakit-startup-repo-picker__header-text {
+	display: grid;
+	gap: 4px;
+	min-width: 0;
+}
+
+.parakit-startup-repo-picker__title {
+	margin: 0;
+	font-size: 24px;
+	font-weight: 700;
+	line-height: 30px;
+	letter-spacing: 0;
+}
+
+.parakit-startup-repo-picker__detail {
+	margin: 0;
+	color: var(--vscode-descriptionForeground, #A6A6A6);
+}
+
+.parakit-startup-repo-picker__problem {
+	display: flex;
+	align-items: flex-start;
+	gap: 8px;
+	padding: 9px 10px;
+	color: var(--vscode-inputValidation-warningForeground, var(--vscode-foreground, #F3F3F3));
+	background: var(--vscode-inputValidation-warningBackground, rgba(245, 197, 66, 0.12));
+	border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(245, 197, 66, 0.38));
+	border-radius: 6px;
+}
+
+.parakit-startup-repo-picker__problem-icon {
+	margin-top: 1px;
+	color: var(--vscode-editorWarning-foreground, #F5C542);
+}
+
+.parakit-startup-repo-picker__repo-grid {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+	gap: 10px;
+	overflow: auto;
+	padding: 1px;
+}
+
+.parakit-startup-repo-picker__repo-card {
+	display: grid;
+	grid-template-columns: auto minmax(0, 1fr) auto;
+	grid-template-areas:
+		"icon name badge"
+		"icon path badge";
+	align-items: center;
+	gap: 2px 10px;
+	min-height: 74px;
+	padding: 12px;
+	color: var(--vscode-foreground, #F3F3F3);
+	background: var(--vscode-editorWidget-background, rgba(255, 255, 255, 0.05));
+	border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.16));
+	border-radius: 6px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.parakit-startup-repo-picker__repo-card:hover:not(:disabled) {
+	background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+	border-color: var(--vscode-focusBorder, #0000ff);
+}
+
+.parakit-startup-repo-picker__repo-card:disabled {
+	color: var(--vscode-disabledForeground, #7A7A7A);
+	cursor: default;
+}
+
+.parakit-startup-repo-picker__repo-card--problem {
+	border-color: var(--vscode-inputValidation-errorBorder, rgba(255, 92, 138, 0.45));
+}
+
+.parakit-startup-repo-picker__repo-icon {
+	grid-area: icon;
+	color: var(--vscode-icon-foreground, #C5C5C5);
+}
+
+.parakit-startup-repo-picker__repo-name,
+.parakit-startup-repo-picker__branch-label {
+	overflow: hidden;
+	font-weight: 600;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.parakit-startup-repo-picker__repo-name {
+	grid-area: name;
+}
+
+.parakit-startup-repo-picker__repo-path {
+	grid-area: path;
+	overflow: hidden;
+	color: var(--vscode-descriptionForeground, #A6A6A6);
+	font-size: 12px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.parakit-startup-repo-picker__repo-badge,
+.parakit-startup-repo-picker__branch-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-height: 20px;
+	padding: 0 7px;
+	color: var(--vscode-badge-foreground, #FFFFFF);
+	background: var(--vscode-badge-background, #4D4D4D);
+	border-radius: 999px;
+	font-size: 11px;
+	line-height: 16px;
+	white-space: nowrap;
+}
+
+.parakit-startup-repo-picker__repo-badge {
+	grid-area: badge;
+}
+
+.parakit-startup-repo-picker__branch-tree {
+	overflow: auto;
+	max-height: min(460px, calc(100vh - 220px));
+	padding: 4px;
+	background: var(--vscode-dropdown-background, rgba(0, 0, 0, 0.14));
+	border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.16));
+	border-radius: 6px;
+}
+
+.parakit-startup-repo-picker__branch-folder,
+.parakit-startup-repo-picker__branch-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	width: 100%;
+	min-height: 30px;
+	padding: 0 8px;
+	box-sizing: border-box;
+}
+
+.parakit-startup-repo-picker__branch-folder {
+	color: var(--vscode-descriptionForeground, #A6A6A6);
+	font-weight: 600;
+}
+
+.parakit-startup-repo-picker__branch-row {
+	color: var(--vscode-foreground, #F3F3F3);
+	background: transparent;
+	border: 0;
+	border-radius: 4px;
+	text-align: left;
+	cursor: pointer;
+}
+
+.parakit-startup-repo-picker__branch-row:hover:not(:disabled) {
+	background: var(--vscode-list-hoverBackground, rgba(255, 255, 255, 0.08));
+}
+
+.parakit-startup-repo-picker__branch-row--current {
+	background: var(--vscode-list-activeSelectionBackground, rgba(0, 0, 255, 0.26));
+	color: var(--vscode-list-activeSelectionForeground, #FFFFFF);
+}
+
+.parakit-startup-repo-picker__branch-row:disabled {
+	color: var(--vscode-disabledForeground, #7A7A7A);
+	cursor: default;
+}
+
+.parakit-startup-repo-picker__branch-icon,
+.parakit-startup-repo-picker__branch-check {
+	flex: 0 0 auto;
+	color: var(--vscode-icon-foreground, #C5C5C5);
+}
+
+.parakit-startup-repo-picker__branch-label {
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.parakit-startup-repo-picker__empty {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 14px;
+	color: var(--vscode-descriptionForeground, #A6A6A6);
+	background: var(--vscode-dropdown-background, rgba(0, 0, 0, 0.14));
+	border: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.16));
+	border-radius: 6px;
+}
+
+.parakit-startup-repo-picker__empty-icon {
+	color: var(--vscode-icon-foreground, #C5C5C5);
+}
+
+@media (max-width: 640px) {
+	.parakit-startup-repo-picker-overlay {
+		padding: 16px;
+	}
+
+	.parakit-startup-repo-picker {
+		max-height: calc(100vh - 32px);
+		padding: 22px;
+	}
+
+	.parakit-startup-repo-picker__repo-grid {
+		grid-template-columns: 1fr;
+	}
+}

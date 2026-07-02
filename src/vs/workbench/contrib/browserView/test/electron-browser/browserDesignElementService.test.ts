@@ -5,11 +5,25 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
+import { IClipboardService } from '../../../../../platform/clipboard/common/clipboardService.js';
+import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { IContextKeyService } from '../../../../../platform/contextkey/common/contextkey.js';
+import { IFileService } from '../../../../../platform/files/common/files.js';
 import { IElementData } from '../../../../../platform/browserView/common/browserView.js';
-import { compactDesignElementDomPath, createDesignElementSelection, createClaudeDesignElementPrompt, extractDesignElementTokenDefinitions, getDesignElementAttributeRows, normalizeDesignElementTokenValue, resolveDesignElementProperties } from '../../common/browserDesignElementService.js';
+import { TestInstantiationService } from '../../../../../platform/instantiation/test/common/instantiationServiceMock.js';
+import { MockContextKeyService } from '../../../../../platform/keybinding/test/common/mockKeybindingService.js';
+import { INotificationService } from '../../../../../platform/notification/common/notification.js';
+import { Registry } from '../../../../../platform/registry/common/platform.js';
+import { IWorkspaceContextService } from '../../../../../platform/workspace/common/workspace.js';
+import { IViewsService } from '../../../../services/views/common/viewsService.js';
+import { ISearchService } from '../../../../services/search/common/search.js';
+import { Extensions as ViewExtensions, IViewContainersRegistry, IViewsRegistry } from '../../../../common/views.js';
+import { TestViewsService } from '../../../../test/browser/workbenchTestServices.js';
+import '../../electron-browser/browserDesignElement.contribution.js';
+import { BROWSER_DESIGN_ELEMENT_CONTAINER_ID, BROWSER_DESIGN_ELEMENT_VIEW_ID, BrowserDesignElementService, compactDesignElementDomPath, createDesignElementSelection, createClaudeDesignElementPrompt, extractDesignElementTokenDefinitions, getDesignElementAttributeRows, normalizeDesignElementTokenValue, resolveDesignElementProperties } from '../../common/browserDesignElementService.js';
 
 suite('BrowserDesignElementService', () => {
-	ensureNoDisposablesAreLeakedInTestSuite();
+	const store = ensureNoDisposablesAreLeakedInTestSuite();
 
 	const elementData: IElementData = {
 		url: 'http://localhost:3000/settings',
@@ -74,6 +88,39 @@ suite('BrowserDesignElementService', () => {
 		assert.deepStrictEqual(selection.classes, ['primary', 'px-4']);
 		assert.strictEqual(selection.bounds.width, 120);
 		assert.ok(selection.domPath.includes('button.primary.px-4'));
+	});
+
+	test('registers the Design element view only when a preview element is selected', () => {
+		const container = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).get(BROWSER_DESIGN_ELEMENT_CONTAINER_ID);
+		const view = Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).getView(BROWSER_DESIGN_ELEMENT_VIEW_ID);
+
+		assert.ok(container);
+		assert.strictEqual(container.hideIfEmpty, true);
+		assert.ok(view);
+		assert.strictEqual(view.when?.serialize(), 'browserDesignElementSelected');
+	});
+
+	test('inspectElement marks the Design element view as selected until inspection closes', async () => {
+		const instantiationService = store.add(new TestInstantiationService());
+		const contextKeyService = store.add(new MockContextKeyService());
+		instantiationService.stub(IContextKeyService, contextKeyService);
+		instantiationService.stub(IViewsService, new TestViewsService());
+		instantiationService.stub(ICommandService, {} as unknown as ICommandService);
+		instantiationService.stub(IClipboardService, {} as unknown as IClipboardService);
+		instantiationService.stub(INotificationService, {} as unknown as INotificationService);
+		instantiationService.stub(IWorkspaceContextService, { getWorkspace: () => ({ id: 'test', folders: [] }) } as unknown as IWorkspaceContextService);
+		instantiationService.stub(IFileService, {} as unknown as IFileService);
+		instantiationService.stub(ISearchService, { textSearch: async () => ({ results: [], limitHit: false, messages: [] }) } as unknown as ISearchService);
+
+		const service = store.add(instantiationService.createInstance(BrowserDesignElementService));
+
+		await service.inspectElement(elementData);
+
+		assert.strictEqual(contextKeyService.getContextKeyValue('browserDesignElementSelected'), true);
+
+		service.closeInspection();
+
+		assert.strictEqual(contextKeyService.getContextKeyValue('browserDesignElementSelected'), false);
 	});
 
 	test('createDesignElementSelection normalizes svg path selections to a meaningful ancestor', () => {

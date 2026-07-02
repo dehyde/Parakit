@@ -28,6 +28,7 @@ import { ILogService } from '../../../../platform/log/common/log.js';
 import { INativeHostService } from '../../../../platform/native/common/native.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { ICommandDetectionCapability, ITerminalCommand, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
@@ -38,8 +39,9 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
-import { createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
+import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
 import { IBrowserViewWorkbenchService } from '../common/browserView.js';
@@ -64,6 +66,9 @@ const MAX_BACKGROUND_RESTART_ATTEMPTS = 3;
 const PREVIEW_STARTUP_HEALTH_INTERVAL = 1_000;
 const PREVIEW_HEALTH_FETCH_TIMEOUT = 5_000;
 const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
+const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
+const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
+const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
 
 export const ConfigureWorkbenchAppPreviewUrlCommandId = 'workbench.action.agentSessions.configureAppPreviewUrl';
 export const ClearWorkbenchAppPreviewOverrideCommandId = 'workbench.action.appPreview.clearOverride';
@@ -131,6 +136,17 @@ interface IAppPreviewCommandStatus extends IPreviewServerStatus {
 	pageId?: string;
 	title?: string;
 	currentUrl?: string;
+}
+
+interface IPreviewTerminalCommandResult {
+	exitCode?: number;
+	output?: string;
+	timedOut?: boolean;
+}
+
+interface IPreviewTerminalSentinel {
+	value: string;
+	resolve(result: IPreviewTerminalCommandResult): void;
 }
 
 type PreviewStartupPhase = WorkbenchAppPreviewStartupPhase;
@@ -211,6 +227,99 @@ async function readPreviewEnv(fileService: IFileService, repository: URI): Promi
 	return env;
 }
 
+async function statWorkbenchAppPreviewPathMtime(fileService: IFileService, resource: URI): Promise<number | undefined> {
+	try {
+		return (await fileService.stat(resource)).mtime;
+	} catch {
+		return undefined;
+	}
+}
+
+async function existsWorkbenchAppPreviewPath(fileService: IFileService, resource: URI): Promise<boolean> {
+	try {
+		return await fileService.exists(resource);
+	} catch {
+		return false;
+	}
+}
+
+async function readWorkbenchAppPreviewTextFile(fileService: IFileService, resource: URI): Promise<string | undefined> {
+	try {
+		return (await fileService.readFile(resource)).value.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+function maxWorkbenchAppPreviewMtime(...values: (number | undefined)[]): number | undefined {
+	const mtimes = values.filter((value): value is number => typeof value === 'number');
+	return mtimes.length ? Math.max(...mtimes) : undefined;
+}
+
+function parseWorkbenchAppPreviewYarnPath(yarnRc: string | undefined): string | undefined {
+	if (!yarnRc) {
+		return undefined;
+	}
+
+	const match = yarnRc.match(/^\s*yarnPath\s*:\s*["']?([^"'\r\n#]+)["']?\s*(?:#.*)?$/m);
+	return match?.[1]?.trim();
+}
+
+async function hasWorkbenchAppPreviewYarnRelease(fileService: IFileService, repository: URI): Promise<boolean> {
+	try {
+		const releases = await fileService.resolve(joinPath(repository, '.yarn', 'releases'));
+		return releases.children?.some(child => child.isFile && child.name.startsWith('yarn-') && child.name.endsWith('.cjs')) === true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveHeuristicPackageManagerConfig(fileService: IFileService, repository: URI, packageManager: string | undefined) {
+	const yarnRc = await readWorkbenchAppPreviewTextFile(fileService, joinPath(repository, '.yarnrc.yml'));
+	const packageLockMtime = maxWorkbenchAppPreviewMtime(
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'package-lock.json')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'npm-shrinkwrap.json')),
+	);
+	const pnpmLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'pnpm-lock.yaml'));
+	const yarnLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'yarn.lock'));
+	const bunLockMtime = maxWorkbenchAppPreviewMtime(
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'bun.lock')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'bun.lockb')),
+	);
+	const nodeModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules'));
+	const dependencyArtifactMtime = maxWorkbenchAppPreviewMtime(
+		nodeModulesMtime,
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.cjs')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.loader.mjs')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.yarn', 'install-state.gz')),
+	);
+	const lockfileMtime = maxWorkbenchAppPreviewMtime(packageLockMtime, pnpmLockMtime, yarnLockMtime, bunLockMtime);
+	const detection = detectWorkbenchAppPreviewPackageManager({
+		packageManager,
+		yarnPath: parseWorkbenchAppPreviewYarnPath(yarnRc),
+		hasYarnRelease: await hasWorkbenchAppPreviewYarnRelease(fileService, repository),
+		hasYarnIntegrity: await existsWorkbenchAppPreviewPath(fileService, joinPath(repository, 'node_modules', '.yarn-integrity')),
+		hasPnpmModulesYaml: await existsWorkbenchAppPreviewPath(fileService, joinPath(repository, 'node_modules', '.modules.yaml')),
+		hasPackageLock: packageLockMtime !== undefined,
+		hasPnpmLock: pnpmLockMtime !== undefined,
+		hasYarnLock: yarnLockMtime !== undefined,
+		hasBunLock: bunLockMtime !== undefined,
+	});
+	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime });
+	const scriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, false);
+	const corepackScriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, true);
+	const installCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, false);
+	const corepackInstallCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, true);
+
+	return {
+		scriptCommandPrefix,
+		...(corepackScriptCommandPrefix !== scriptCommandPrefix ? { corepackScriptCommandPrefix } : {}),
+		installCommand,
+		...(corepackInstallCommand !== installCommand ? { corepackInstallCommand } : {}),
+		dependencyReadiness,
+	};
+}
+
 function isHttpPreviewTarget(url: string | undefined): boolean {
 	if (!url) {
 		return false;
@@ -230,7 +339,9 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		const content = await fileService.readFile(joinPath(repository, 'package.json'));
 		const parsed = JSON.parse(content.value.toString());
 		const scripts = typeof parsed === 'object' && parsed !== null ? (parsed as { scripts?: Record<string, unknown> }).scripts : undefined;
-		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env);
+		const packageManager = typeof parsed === 'object' && parsed !== null ? (parsed as { packageManager?: unknown }).packageManager : undefined;
+		const packageManagerConfig = await resolveHeuristicPackageManagerConfig(fileService, repository, typeof packageManager === 'string' ? packageManager : undefined);
+		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env, packageManagerConfig);
 		if (npmConfig) {
 			return npmConfig;
 		}
@@ -407,142 +518,6 @@ function detectPreviewUrlPort(value: string): { prefix: string; port: string; su
 function templatePreviewUrlPort(value: string): string {
 	return detectPreviewUrlPort(value)?.templatedUrl ?? value.trim();
 }
-
-const APP_PREVIEW_STARTUP_ANIMATION_SRC = 'data:image/svg+xml;base64,' +
-	'PHN2ZyB3aWR0aD0iOTEiIGhlaWdodD0iMTU5IiB2aWV3Qm94PSIwIDAgOTEgMTU5IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAw' +
-	'MC9zdmciPgo8c3R5bGU+CnN2ZyB7IG92ZXJmbG93OiB2aXNpYmxlOyB9CkBrZXlmcmFtZXMga2ZfRWxsaXBzZV8xX3RyYW5zZm9ybV8wIHsKICAwJSB7CiAg' +
-	'ICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBzY2FsZVgo' +
-	'MCkgc2NhbGVZKDApIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICAxMi44NCUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjog' +
-	'Y3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkgdHJh' +
-	'bnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgwKSBzY2FsZVkoMCkgdHJhbnNsYXRlKC00LjExOHB4LCAtNC4xMThweCk7CiAgfQogIDE2LjQ1JSB7' +
-	'CiAgICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBzY2Fs' +
-	'ZVgoMSkgc2NhbGVZKDEpIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICA3Ni41MiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlv' +
-	'bjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkg' +
-	'dHJhbnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgxKSBzY2FsZVkoMSkgdHJhbnNsYXRlKC00LjExOHB4LCAtNC4xMThweCk7CiAgfQogIDgxLjA5' +
-	'JSB7CiAgICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBz' +
-	'Y2FsZVgoMCkgc2NhbGVZKDApIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICAxMDAlIHsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1' +
-	'Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkgdHJhbnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgwKSBzY2FsZVkoMCkgdHJhbnNsYXRlKC00' +
-	'LjExOHB4LCAtNC4xMThweCk7CiAgfQp9CiNFbGxpcHNlXzEgewogIHRyYW5zZm9ybS1vcmlnaW46IDAgMDsKICBhbmltYXRpb246IGtmX0VsbGlwc2VfMV90' +
-	'cmFuc2Zvcm1fMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGU7Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMV9zdWIwX2JvcmRlci13aWR0aF8wIHsKICAwJSB7' +
-	'CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDdweDsKICB9CiAgODUuMyUgewogICAgYW5pbWF0aW9u' +
-	'LXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA5MS40MyUgewogICAg' +
-	'YW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDkxLjQ5JSB7CiAgICBhbmltYXRpb24tdGlt' +
-	'aW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDBweDsKICB9CiAgOTkuNTklIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246' +
-	'IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDogMHB4OwogIH0KICAxMDAlIHsKICAgIHN0cm9rZS13aWR0aDogMHB4OwogIH0KfQpAa2V5ZnJhbWVzIGtmX1Zl' +
-	'Y3Rvcl8xX3N1YjBfcGF0aC10cmltXzAgewogIDAlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAg' +
-	'dmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAyLjYzNyUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLWRhc2hh' +
-	'cnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDM1LjYwNSUgewogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA0NS40OTYlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgNjEuMTU1JSB7CiAgICBh' +
-	'bmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC43NiwgMCwgMC4yNCwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBz' +
-	'dHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDg3LjQ3MiUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwog' +
-	'ICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAxMDAlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsK' +
-	'ICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAtMTsKICAgIHZpc2liaWxpdHk6IGhpZGRlbjsKICB9Cn0KI1ZlY3Rvcl8xX3N1YjAgewogIGFuaW1hdGlvbjoKICAg' +
-	'IGtmX1ZlY3Rvcl8xX3N1YjBfYm9yZGVyLXdpZHRoXzAgMy4wMzMyNnMgbGluZWFyIGluZmluaXRlLAogICAga2ZfVmVjdG9yXzFfc3ViMF9wYXRoLXRyaW1f' +
-	'MCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGU7Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMV9zdWIxX2JvcmRlci13aWR0aF8wIHsKICAwJSB7CiAgICBhbmlt' +
-	'YXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDdweDsKICB9CiAgODUuMyUgewogICAgYW5pbWF0aW9uLXRpbWluZy1m' +
-	'dW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA5MS40MyUgewogICAgYW5pbWF0aW9u' +
-	'LXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9' +
-	'CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzFfc3ViMV9wYXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRh' +
-	'c2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDQuNDE4JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2Ut' +
-	'ZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IGhpZGRlbjsKICB9CiAgNC42MTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVh' +
-	'cjsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAzNy41' +
-	'ODMlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAg' +
-	'NDcuNDc0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAg' +
-	'fQogIDU2LjYwNiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS1kYXNo' +
-	'YXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgNjEuMTU1JSB7CiAgICBhbmltYXRp' +
-	'b24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC43NiwgMCwgMC4yNCwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwLjk3MDkgMTsKICAgIHN0' +
-	'cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgODkuNDUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246' +
-	'IGN1YmljLWJlemllcigwLjUsIDAsIDAuNSwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZp' +
-	'c2liaWxpdHk6IGhpZGRlbjsKICB9CiAgMTAwJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2' +
-	'aXNpYmlsaXR5OiBoaWRkZW47CiAgfQp9CiNWZWN0b3JfMV9zdWIxIHsKICBhbmltYXRpb246CiAgICBrZl9WZWN0b3JfMV9zdWIxX2JvcmRlci13aWR0aF8w' +
-	'IDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZSwKICAgIGtmX1ZlY3Rvcl8xX3N1YjFfcGF0aC10cmltXzAgMy4wMzMyNnMgbGluZWFyIGluZmluaXRlOwp9CkBr' +
-	'ZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViMl9ib3JkZXItd2lkdGhfMCB7CiAgMCUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwog' +
-	'ICAgc3Ryb2tlLXdpZHRoOiA3cHg7CiAgfQogIDk1LjQ1JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC41LCAwLCAw' +
-	'LjUsIDEpOwogICAgc3Ryb2tlLXdpZHRoOiA3cHg7CiAgfQogIDk5LjU5JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBz' +
-	'dHJva2Utd2lkdGg6IDBweDsKICB9CiAgMTAwJSB7CiAgICBzdHJva2Utd2lkdGg6IDBweDsKICB9Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMl9zdWIyX3Bh' +
-	'dGgtdHJpbV8wIHsKICAwJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBo' +
-	'aWRkZW47CiAgfQogIDYuNTk0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5' +
-	'OiBoaWRkZW47CiAgfQogIDI2LjMyNiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNTIsIDAsIDAuNzMxLCAwLjU1' +
-	'Myk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDM5' +
-	'LjU2MSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuMjQ1LCAwLjU0MywgMC41MjcsIDEpOwogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMC42NDEyIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTAuMzU4ODsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDQ5LjQ1MiUg' +
-	'ewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2MS4x' +
-	'NTUlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAg' +
-	'ODEuMDg5JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC4wMjYsIDAuMjg5LCAwLjUsIDEpOwogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA5NS4zODMlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAxMDAlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzJfc3ViMiB7' +
-	'CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViMl9ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3Jf' +
-	'Ml9zdWIyX3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpAa2V5ZnJhbWVzIGtmX1ZlY3Rvcl8yX3N1YjNfYm9yZGVyLXdpZHRoXzAg' +
-	'ewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA4NC4zOSUgewogICAg' +
-	'YW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA4OS40' +
-	'NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tl' +
-	'LXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViM19wYXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTog' +
-	'MCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDguNTcyJSB7CiAgICBhbmltYXRpb24tdGltaW5n' +
-	'LWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IGhp' +
-	'ZGRlbjsKICB9CiAgNDEuNTM5JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6' +
-	'IHZpc2libGU7CiAgfQogIDUxLjQzJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxp' +
-	'dHk6IHZpc2libGU7CiAgfQogIDYxLjE1NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuMTUxLCAtMC4wMTMsIDEs' +
-	'IDAuNDY2KTsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9' +
-	'CiAgODEuMDg5JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47' +
-	'CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVu' +
-	'OwogIH0KfQojVmVjdG9yXzJfc3ViMyB7CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViM19ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIg' +
-	'aW5maW5pdGUsCiAgICBrZl9WZWN0b3JfMl9zdWIzX3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpAa2V5ZnJhbWVzIGtmX1ZlY3Rv' +
-	'cl8yX3N1YjRfYm9yZGVyLXdpZHRoXzAgewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDog' +
-	'N3B4OwogIH0KICA4Ny41NiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9r' +
-	'ZS13aWR0aDogN3B4OwogIH0KICA4OS40NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7' +
-	'CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViNF9wYXRoLXRyaW1fMCB7CiAgMCUg' +
-	'ewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwLjcx' +
-	'NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZz' +
-	'ZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDUxLjQzJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9m' +
-	'ZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDUzLjQwOCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRh' +
-	'c2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2MS4xNTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1Ymlj' +
-	'LWJlemllcigwLjc2LCAwLCAwLjI0LCAxKTsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJp' +
-	'bGl0eTogdmlzaWJsZTsKICB9CiAgOTUuNTc0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2' +
-	'aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAg' +
-	'dmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzJfc3ViNCB7CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViNF9ib3JkZXItd2lkdGhf' +
-	'MCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3JfMl9zdWI0X3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpA' +
-	'a2V5ZnJhbWVzIGtmX1ZlY3Rvcl8zX3N1YjVfYm9yZGVyLXdpZHRoXzAgewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsK' +
-	'ICAgIHN0cm9rZS13aWR0aDogNnB4OwogIH0KICA4NC4zOSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwg' +
-	'MC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogNnB4OwogIH0KICA4Ny45MiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAg' +
-	'c3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzNfc3ViNV9w' +
-	'YXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTog' +
-	'aGlkZGVuOwogIH0KICAxOS4xNTQlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1YmljLWJlemllcigwLjAxNywgMC45OTYsIDAuNSwgMSk7' +
-	'CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDI5Ljk2' +
-	'OCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2' +
-	'MS4xNTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1YmljLWJlemllcigwLjc2LCAwLCAwLjI0LCAxKTsKICAgIHN0cm9rZS1kYXNoYXJy' +
-	'YXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgOTcuMzYzJSB7CiAgICBzdHJva2UtZGFz' +
-	'aGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzNfc3ViNSB7CiAg' +
-	'YW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzNfc3ViNV9ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3JfM19z' +
-	'dWI1X3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQo8L3N0eWxlPgo8ZyBpZD0icGFyYWtpdF9hbmltYXRpb25fd2hpdGUiPgo8Y2ly' +
-	'Y2xlIGlkPSJFbGxpcHNlXzEiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDU3LjY0NzEgMTYuNDcwNikiIGN4PSI0LjExNzY1IiBjeT0iNC4xMTc2NSIgcj0iMy43' +
-	'MDU4OCIgZmlsbD0id2hpdGUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMC44MjM1MjkiLz4KPHBhdGggaWQ9IlZlY3Rvcl8xX3N1YjAiIHRyYW5z' +
-	'Zm9ybT0idHJhbnNsYXRlKDE0LjgyMzUgMzguMjY5MykiIGQ9Ik0wIDUxLjQ5NTRDMCA0NC4wODM2IDMuMjk0MTIgLTEuMjEwNSAyNy4xNzY1IDAuMDI0Nzk3' +
-	'NiIgcGF0aExlbmd0aD0iMSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9' +
-	'IjAuOTI0MiAxIi8+CjxwYXRoIGlkPSJWZWN0b3JfMV9zdWIxIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgtNy42MjkzOWUtMDYgNDEuNTg4MikiIGQ9Ik0wIDcw' +
-	'LjQxMThDMCA1OC4wNTg4IDQ2LjcxNDIgNTEuNzU4MiA1NS4xNzY1IDIwLjE3NjVDNTcuNDkzNCAxMS41Mjk0IDU2LjQxMTggNi41ODgyNCA1MS4wNTg4IDAi' +
-	'IHBhdGhMZW5ndGg9IjEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iNyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtZGFzaGFycmF5PSIw' +
-	'LjUxMDQgMSIvPgo8cGF0aCBpZD0iVmVjdG9yXzJfc3ViMiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNi4xNzY0NyA5OC4yMTA2KSIgZD0iTTYuMTc2NDcgMTYu' +
-	'MjZDNi4xNzY0NyAyNi44ODQ3IDIuMTYwNjMgMzguMDQ0OCAwLjYwNTIxNCA0OS4wOTI4QzAuMDI5MDQxNyA1My4xODUzIDMuODI4MTMgNTUuODkzMyA2LjU4' +
-	'NjE2IDUyLjgxNTRDMTYuOTUzMyA0MS4yNDU4IDIzLjQ0MTggOS45NjM4NyA0MC45NzUzIDAiIHBhdGhMZW5ndGg9IjEiIHZpc2liaWxpdHk9ImhpZGRlbiIg' +
-	'c3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAgMSIvPgo8cGF0aCBpZD0i' +
-	'VmVjdG9yXzJfc3ViMyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuMTUxOCA5NS4xMTc3KSIgZD0iTTM2Ljg0ODIgNS43NjQ3MUMzNi44NDgyIDUuNzY0NzEg' +
-	'MjkuNDM2NCAwIDExLjczMDUgMEM3LjMxODI1IDAgMy40NDU4MyAxLjEzNDgxIDAgMy4wOTI5OCIgcGF0aExlbmd0aD0iMSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ry' +
-	'b2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAuMDMwMyAxIi8+CjxwYXRoIGlkPSJWZWN0b3JfMl9zdWI0' +
-	'IiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyOS4yMzUzIDUuNzkxZS0wNikiIGQ9Ik0wIDQyLjgyMzVDMi4xOTYwOCA0MS44NjI3IDYuMTc2NDcgMzcuNDcwNiA2' +
-	'LjE3NjQ3IDI3LjU4ODJDNi4xNzY0NyAxNS4yMzUzIDEzLjU4ODIgMCAzMC44ODI0IDBDNDguMTc2NSAwIDUyLjcwNTkgMTUuMjM1MyA1Mi43MDU5IDIxQzUy' +
-	'LjcwNTkgMjIuODU3MiA1My44ODA4IDIyLjQ3MzEgNTMuNTI5NCAyNS4xMTc2QzUzLjExOTYgMjguMjAxOSA1MS40MDYyIDMzLjI2NzIgNDguNDIwOCAzNi43' +
-	'MjZDNDYuOTQzNyAzOC40MzcyIDQ1LjY4ODIgNDAuNTAxNiA0Ni4xNDI3IDQyLjcxNkM0Ni42MzA3IDQ1LjA5MjkgNDcuMzUyOSA0Ny41OTMxIDQ3LjM1Mjkg' +
-	'NTAuNjQ3MUM0Ny4zNTI5IDU2LjIxMzkgNDQuNjY1IDcyLjkxNjQgMjguOTA2NiA4Ny4xMDczQzI4LjA3MDMgODcuODYwNCAyOC4xNTU0IDg5LjI0NjkgMjgu' +
-	'OTc0OCA5MC4wMTg0QzMxLjE3MjIgOTIuMDg3MSAzMy43NjQ3IDk1LjgyMDcgMzMuNzY0NyAxMDAuODgyQzMzLjc2NDcgMTA3LjQ3MSAyNy41ODgyIDEwNy40' +
-	'NzEgMjcuMTc2NSAxMDcuNDcxQzIwLjU4ODIgMTA3LjQ3MSAxNy45MTY1IDk4LjIxMDYgMTcuOTE2NSA5OC4yMTA2IiBwYXRoTGVuZ3RoPSIxIiBzdHJva2U9' +
-	'IndoaXRlIiBzdHJva2Utd2lkdGg9IjciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWRhc2hhcnJheT0iMC4yNjk1IDEiLz4KPHBhdGggaWQ9IlZl' +
-	'Y3Rvcl8zX3N1YjUiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcyLjQ3MDYgMjAuODc5MykiIGQ9Ik05LjQ3MDU5IDAuMTIwNzA1QzYuMzEzNzMgLTAuMjkxMDYg' +
-	'MCAwLjEyMDcwNSAwIDUuMDYxODhDMCAxMC4wMDMxIDMuNDMxMzcgMTMuOTgzNSA1LjM1Mjk0IDE1LjM1NkM3LjI1NTI5IDE2LjcxNDggMTIuNTIwNyAwLjg1' +
-	'NDYzNCA5LjU2Mjc1IDAuMTM3NzYiIHBhdGhMZW5ndGg9IjEiIHZpc2liaWxpdHk9ImhpZGRlbiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBz' +
-	'dHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAgMSIvPgo8L2c+Cjwvc3ZnPgo=';
 
 interface IBranchPreviewSettingsResult {
 	readonly action: 'saveShared' | 'saveLocal' | 'clearLocal';
@@ -933,6 +908,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 	private _serverCwd: string | undefined;
 	private _serverStartInFlight: Promise<IPreviewServerStatus> | undefined;
 	private _serverStartGeneration = 0;
+	private _serverTerminalSentinel: IPreviewTerminalSentinel | undefined;
 	private _needsConfigurationPrompt = false;
 	private _portConflictRecoveryAttempts = 0;
 	private _portConflictRecoveryInFlight = false;
@@ -1447,6 +1423,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (instance === this._serverTerminal) {
 			this._serverRecentOutput = `${this._serverRecentOutput}${data}`.slice(-PREVIEW_SERVER_OUTPUT_LIMIT);
 			this._serverLastOutputAt = Date.now();
+			this._resolveServerTerminalSentinelFromOutput();
 			const url = this._extractServerAdvertisedUrl(this._serverRecentOutput);
 			if (url) {
 				await this._adoptServerAdvertisedUrl(url);
@@ -1472,6 +1449,155 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (url) {
 			await this.ensurePreview(false);
 			await this.navigateDiscoveredUrl(url);
+		}
+	}
+
+	private _resolveServerTerminalSentinelFromOutput(): void {
+		const sentinel = this._serverTerminalSentinel;
+		if (!sentinel) {
+			return;
+		}
+
+		const match = this._serverRecentOutput.match(new RegExp(`${sentinel.value}:(\\d+)`));
+		if (!match) {
+			return;
+		}
+
+		this._serverTerminalSentinel = undefined;
+		sentinel.resolve({
+			exitCode: Number(match[1]),
+			output: this._serverRecentOutput,
+		});
+	}
+
+	private async _waitForCommandDetectionCapability(terminal: ITerminalInstance, timeoutMs: number): Promise<ICommandDetectionCapability | undefined> {
+		const existing = terminal.capabilities.get(TerminalCapability.CommandDetection);
+		if (existing) {
+			return existing;
+		}
+
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const timeout = mainWindow.setTimeout(() => {
+				store.dispose();
+				resolve(undefined);
+			}, timeoutMs);
+			store.add(terminal.capabilities.onDidAddCommandDetectionCapability(capability => {
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve(capability);
+			}));
+		});
+	}
+
+	private async _runPreviewTerminalCommandWithDetection(terminal: ITerminalInstance, command: string, timeoutMs: number): Promise<IPreviewTerminalCommandResult | undefined> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		if (!commandDetection) {
+			return undefined;
+		}
+
+		const commandId = `app-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const timeout = mainWindow.setTimeout(() => {
+				store.dispose();
+				resolve({ output: this._serverRecentOutput, timedOut: true });
+			}, timeoutMs);
+			const finish = (terminalCommand: ITerminalCommand) => {
+				if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+					return;
+				}
+
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve({
+					exitCode: terminalCommand.exitCode,
+					output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+				});
+			};
+			store.add(commandDetection.onCommandFinished(finish));
+			store.add(commandDetection.onCommandInvalidated(commands => {
+				for (const terminalCommand of commands) {
+					finish(terminalCommand);
+				}
+			}));
+			void terminal.runCommand(command, true, commandId, true).catch(error => {
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private _matchesPreviewTerminalCommand(terminalCommand: ITerminalCommand, commandId: string, command: string): boolean {
+		if (terminalCommand.id === commandId || terminalCommand.command === command) {
+			return true;
+		}
+
+		try {
+			return terminalCommand.extractCommandLine() === command;
+		} catch {
+			return false;
+		}
+	}
+
+	private async _runPreviewTerminalCommandWithSentinel(terminal: ITerminalInstance, command: string, timeoutMs: number): Promise<IPreviewTerminalCommandResult> {
+		const sentinel = `__APP_PREVIEW_COMMAND_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+		const sentinelCommand = `${command}; echo ${sentinel}:$?`;
+		return new Promise(resolve => {
+			const timeout = mainWindow.setTimeout(() => {
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: this._serverRecentOutput, timedOut: true });
+			}, timeoutMs);
+			this._serverTerminalSentinel = {
+				value: sentinel,
+				resolve: result => {
+					mainWindow.clearTimeout(timeout);
+					resolve(result);
+				}
+			};
+			void terminal.sendText(sentinelCommand, true, true).catch(error => {
+				mainWindow.clearTimeout(timeout);
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private async _runPreviewTerminalCommand(terminal: ITerminalInstance, command: string, timeoutMs: number, useSentinelFallback: boolean): Promise<IPreviewTerminalCommandResult> {
+		const detectionResult = await this._runPreviewTerminalCommandWithDetection(terminal, command, timeoutMs);
+		if (detectionResult) {
+			return detectionResult;
+		}
+
+		if (!useSentinelFallback) {
+			return { output: this._serverRecentOutput, timedOut: true };
+		}
+
+		return this._runPreviewTerminalCommandWithSentinel(terminal, command, timeoutMs);
+	}
+
+	private async _isCorepackAvailable(terminal: ITerminalInstance): Promise<boolean> {
+		const result = await this._runPreviewTerminalCommand(terminal, 'corepack --version', PREVIEW_COREPACK_PROBE_TIMEOUT, false);
+		return result.exitCode === 0;
+	}
+
+	private _formatPreviewTerminalFailureMessage(output: string, fallback: string): string {
+		switch (classifyWorkbenchAppPreviewTerminalFailure(output, this._serverPort)) {
+			case 'portConflict':
+				return localize('appPreviewTerminalFailurePortConflict', "The preview server could not start because the selected port is already in use.");
+			case 'missingBinary':
+				return localize('appPreviewTerminalFailureMissingBinary', "A required command was not found on this machine.");
+			case 'moduleNotFound':
+				return localize('appPreviewTerminalFailureModuleNotFound', "A required Node dependency is missing.");
+			case 'permissionDenied':
+				return localize('appPreviewTerminalFailurePermissionDenied', "The preview command was blocked by a permissions error.");
+			default:
+				return fallback;
 		}
 	}
 
@@ -2090,12 +2216,15 @@ export class WorkbenchAppPreviewController extends Disposable {
 		const fixedPort = getWorkbenchAppPreviewDevConfigFixedPort(resolvedConfig);
 		const port = fixedPort ?? (requestedPort && await this._isPortAvailable(requestedPort) ? requestedPort : await this._findAvailablePort());
 		const resolvedServer = applyWorkbenchAppPreviewDevPort(resolvedConfig, port);
+		const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, String(port));
+		let serverCommand = resolvedServer.command;
+		let installCommand = resolvedConfig.installCommand ? replacePort(resolvedConfig.installCommand) : undefined;
 		const cwd = resolvedConfig.cwd ? joinPath(root, resolvedConfig.cwd).fsPath : root.fsPath;
 		this._serverUrl = resolvedServer.url;
 		this._serverHealthUrl = resolvedServer.healthUrl;
 		this._serverHealthPath = resolvedConfig.healthPath;
 		this._serverBranch = branchName;
-		this._serverCommand = resolvedServer.command;
+		this._serverCommand = serverCommand;
 		this._serverPort = port;
 		this._serverFixedPort = fixedPort;
 		this._serverCwd = cwd;
@@ -2107,11 +2236,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		await this.ensurePreview(false);
 		if (waitForHealthy) {
-			this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, context, {
-				message: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
+			this._showPreviewStartupPage(this._createPreviewStartupPageState(installCommand ? 'installingDependencies' : 'serverStarting', root, branchName, context, {
+				message: installCommand
+					? localize('appPreviewInstallPreparingMessage', "Checking and installing dependencies before starting the preview.")
+					: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
 				url: resolvedServer.url,
 				healthUrl: resolvedServer.healthUrl,
-				command: resolvedServer.command,
+				command: installCommand ?? serverCommand,
 				cwd
 			}));
 		} else {
@@ -2139,7 +2270,60 @@ export class WorkbenchAppPreviewController extends Disposable {
 			this._serverTerminalExitStore.add(terminal.onExit(() => {
 				this._serverTerminalExited = true;
 			}));
-			await this._serverTerminal.sendText(resolvedServer.command, true, true);
+			const corepackAvailable = resolvedConfig.corepackCommand || resolvedConfig.corepackInstallCommand
+				? await this._isCorepackAvailable(terminal)
+				: false;
+			if (corepackAvailable && resolvedConfig.corepackCommand) {
+				serverCommand = replacePort(resolvedConfig.corepackCommand);
+			}
+			if (corepackAvailable && resolvedConfig.corepackInstallCommand) {
+				installCommand = replacePort(resolvedConfig.corepackInstallCommand);
+			}
+			this._serverCommand = serverCommand;
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (installCommand) {
+				if (waitForHealthy) {
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('installingDependencies', root, branchName, context, {
+						message: localize('appPreviewInstallingDependenciesMessage', "Installing dependencies before starting the preview server."),
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+				}
+				const installResult = await this._runPreviewTerminalCommand(terminal, installCommand, PREVIEW_DEPENDENCY_INSTALL_TIMEOUT, true);
+				if (!isCurrentStart()) {
+					return this.getPreviewStatus();
+				}
+				if (installResult.timedOut || (installResult.exitCode !== undefined && installResult.exitCode !== 0)) {
+					this._serverState = 'failed';
+					this._serverHealth = 'unknown';
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(installResult.output ?? this._serverRecentOutput, installResult.timedOut
+						? localize('appPreviewInstallTimedOutMessage', "Dependency install timed out before the preview server could start.")
+						: localize('appPreviewInstallFailedMessage', "Dependency install failed before the preview server could start."));
+					this._previewStartupInProgress = false;
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('missingDependencies', root, branchName, context, {
+						message: this._serverMessage,
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+					return this.getPreviewStatus();
+				}
+			}
+			if (waitForHealthy) {
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, context, {
+					message: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
+					url: resolvedServer.url,
+					healthUrl: resolvedServer.healthUrl,
+					command: serverCommand,
+					cwd
+				}));
+			}
+			await this._serverTerminal.sendText(serverCommand, true, true);
 			if (!isCurrentStart()) {
 				return this.getPreviewStatus();
 			}
@@ -2152,7 +2336,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 					message: localize('appPreviewHealthCheckingMessage', "The server is starting. Waiting for the preview health check to pass."),
 					url: resolvedServer.url,
 					healthUrl: resolvedServer.healthUrl,
-					command: resolvedServer.command,
+					command: serverCommand,
 					cwd
 				}));
 				const healthy = await this._waitForPreviewHealth(PREVIEW_STARTUP_HEALTH_TIMEOUT);
@@ -2173,9 +2357,9 @@ export class WorkbenchAppPreviewController extends Disposable {
 				} else if (this._serverTerminalExited) {
 					this._serverHealth = 'unhealthy';
 					this._serverState = 'failed';
-					this._serverMessage = localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly.");
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(this._serverRecentOutput, localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly."));
 					this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
-						message: localize('appPreviewServerExitedDetails', "The server process exited before the health check passed. Check the terminal logs for errors."),
+						message: this._serverMessage,
 						url: this._serverUrl,
 						healthUrl: this._serverHealthUrl,
 						command: this._serverCommand,
@@ -2213,7 +2397,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 				message: this._serverMessage,
 				url: resolvedServer.url,
 				healthUrl: resolvedServer.healthUrl,
-				command: resolvedServer.command,
+				command: serverCommand,
 				cwd
 			}));
 		}
@@ -2249,19 +2433,22 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		const stageLabels = [
 			localize('appPreviewStagePrepare', "Prepare preview"),
+			localize('appPreviewStageInstallDependencies', "Install dependencies"),
 			localize('appPreviewStageStartServer', "Start server"),
 			localize('appPreviewStageWaitForApp', "Wait for app response"),
 			localize('appPreviewStageOpenPreview', "Open preview"),
 		];
 		const currentIndex = phase === 'starting'
 			? 0
-			: phase === 'serverStarting'
+			: phase === 'installingDependencies'
 				? 1
-				: phase === 'healthChecking' || phase === 'slow'
+				: phase === 'serverStarting'
 					? 2
-					: phase === 'opening'
+					: phase === 'healthChecking' || phase === 'slow'
 						? 3
-						: stageLabels.length;
+						: phase === 'opening'
+							? 4
+							: stageLabels.length;
 
 		const stages = stageLabels.map((label, index): IPreviewStartupStage => ({
 			label,
@@ -2269,7 +2456,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			startedAt: index === currentIndex ? this._previewStartupPhaseStartedAt : undefined
 		}));
 
-		if (phase === 'failed') {
+		if (phase === 'failed' || phase === 'missingDependencies') {
 			return [
 				...stages.map(stage => stage.status === 'current' ? { ...stage, status: 'done' as const, startedAt: undefined } : stage),
 				{
@@ -2303,15 +2490,17 @@ export class WorkbenchAppPreviewController extends Disposable {
 		const title = getWorkbenchAppPreviewStartupTitle(phase, branchName);
 		const details = [
 			phase === 'starting' ? localize('appPreviewStartingDetails', "Switching branches is complete. The preview server is being prepared.") : undefined,
+			phase === 'installingDependencies' ? localize('appPreviewInstallingDependenciesDetails', "Dependencies are being installed before the server starts.") : undefined,
 			phase === 'serverStarting' ? localize('appPreviewServerInitializing', "Server is initializing.") : undefined,
 			phase === 'healthChecking' ? localize('appPreviewHealthCheckWaiting', "Health check is waiting for the app to respond.") : undefined,
 			phase === 'slow' ? localize('appPreviewSlowHint', "The server may still be compiling or waiting on a dependency.") : undefined,
+			phase === 'missingDependencies' ? localize('appPreviewMissingDependenciesHint', "Dependency install did not complete. Check the terminal logs or retry the preview server.") : undefined,
 			phase === 'failed' ? localize('appPreviewFailedHint', "Check the terminal logs or restart the preview server.") : undefined,
 			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a saved preview URL.") : undefined,
 		].filter((value): value is string => !!value);
 		const actions: IPreviewStartupPageState['actions'] = phase === 'slow'
 			? ['retry', 'restart', 'logs', 'copy']
-			: phase === 'failed' || phase === 'setup'
+			: phase === 'failed' || phase === 'missingDependencies' || phase === 'setup'
 				? ['retry', 'restart', 'logs']
 				: [];
 
@@ -2374,6 +2563,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		this._serverStartGeneration++;
 		this._serverHealthPollStore.clear();
 		this._serverTerminalExitStore.clear();
+		this._serverTerminalSentinel?.resolve({ output: this._serverRecentOutput, timedOut: true });
+		this._serverTerminalSentinel = undefined;
 		this._serverTerminal?.dispose();
 		this._serverTerminal = undefined;
 		this._serverTerminalExited = true;

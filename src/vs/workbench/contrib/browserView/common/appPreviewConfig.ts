@@ -69,11 +69,15 @@ export interface IWorkbenchAppPreviewDevConfig {
 
 export interface IResolvedWorkbenchAppPreviewDevConfig {
 	command: string;
+	corepackCommand?: string;
 	cwd?: string;
 	portEnv?: string;
 	url: string;
 	healthPath?: string;
 	fixedPort?: number;
+	installCommand?: string;
+	corepackInstallCommand?: string;
+	dependencyReadiness?: 'ready' | 'missing' | 'stale';
 }
 
 export interface IWorkbenchAppPreviewResolvedServer {
@@ -116,6 +120,16 @@ export interface IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy {
 	readonly currentServerUrl: string | undefined;
 	readonly advertisedUrl: string;
 }
+
+export interface IWorkbenchAppPreviewHeuristicPackageManagerConfig {
+	readonly scriptCommandPrefix: string;
+	readonly corepackScriptCommandPrefix?: string;
+	readonly installCommand?: string;
+	readonly corepackInstallCommand?: string;
+	readonly dependencyReadiness?: 'ready' | 'missing' | 'stale';
+}
+
+export type WorkbenchAppPreviewTerminalFailure = 'portConflict' | 'missingBinary' | 'moduleNotFound' | 'permissionDenied' | 'unknown';
 
 export interface IWorkbenchAppPreviewStartupPageKeyStage {
 	readonly label: string;
@@ -551,7 +565,7 @@ export function getWorkbenchAppPreviewDevConfigFixedPort(config: IResolvedWorkbe
 	return config.fixedPort ?? getWorkbenchAppPreviewUrlFixedPort(config.url);
 }
 
-export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv): IResolvedWorkbenchAppPreviewDevConfig | undefined {
+export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv, packageManager?: IWorkbenchAppPreviewHeuristicPackageManagerConfig): IResolvedWorkbenchAppPreviewDevConfig | undefined {
 	if (!scripts) {
 		return undefined;
 	}
@@ -559,14 +573,24 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	const envUrl = getWorkbenchAppPreviewPublicEnvUrl(env);
 	const resolvedUrl = url?.trim() || envUrl || DEFAULT_DEV_URL_TEMPLATE;
 	const fixedPort = getWorkbenchAppPreviewUrlFixedPort(resolvedUrl) ?? parseWorkbenchAppPreviewPort(env?.PORT);
+	const scriptCommandPrefix = packageManager?.scriptCommandPrefix?.trim() || 'npm run';
+	const corepackScriptCommandPrefix = packageManager?.corepackScriptCommandPrefix?.trim();
+	const installCommand = packageManager?.dependencyReadiness && packageManager.dependencyReadiness !== 'ready'
+		? packageManager.installCommand?.trim()
+		: undefined;
+	const corepackInstallCommand = installCommand ? packageManager?.corepackInstallCommand?.trim() : undefined;
 	for (const scriptName of ['dev', 'start', 'serve']) {
 		if (typeof scripts[scriptName] === 'string') {
 			return {
-				command: `npm run ${scriptName}`,
+				command: `${scriptCommandPrefix} ${scriptName}`,
+				...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}` } : {}),
 				portEnv: DEFAULT_DEV_PORT_ENV,
 				url: resolvedUrl,
 				healthPath: '/',
 				...(fixedPort !== undefined ? { fixedPort } : {}),
+				...(installCommand ? { installCommand } : {}),
+				...(corepackInstallCommand ? { corepackInstallCommand } : {}),
+				...(installCommand && packageManager?.dependencyReadiness ? { dependencyReadiness: packageManager.dependencyReadiness } : {}),
 			};
 		}
 	}
@@ -628,6 +652,33 @@ export function isWorkbenchAppPreviewPortConflict(output: string, port: number |
 	}
 
 	return new RegExp(`(^|[^0-9])${port}([^0-9]|$)`).test(output);
+}
+
+export function classifyWorkbenchAppPreviewTerminalFailure(output: string, port: number | undefined): WorkbenchAppPreviewTerminalFailure {
+	if (isWorkbenchAppPreviewPortConflict(output, port)) {
+		return 'portConflict';
+	}
+
+	const lowerOutput = output.toLowerCase();
+	if (lowerOutput.includes('command not found') ||
+		lowerOutput.includes('not recognized as an internal or external command') ||
+		lowerOutput.includes('enoent')) {
+		return 'missingBinary';
+	}
+
+	if (lowerOutput.includes('cannot find module') ||
+		lowerOutput.includes('module not found') ||
+		lowerOutput.includes('err_module_not_found') ||
+		lowerOutput.includes('cannot find package')) {
+		return 'moduleNotFound';
+	}
+
+	if (lowerOutput.includes('permission denied') ||
+		lowerOutput.includes('eacces')) {
+		return 'permissionDenied';
+	}
+
+	return 'unknown';
 }
 
 export function shouldRestartWorkbenchAppPreviewAfterHealthFailures(policy: IWorkbenchAppPreviewHealthFailureRestartPolicy): boolean {

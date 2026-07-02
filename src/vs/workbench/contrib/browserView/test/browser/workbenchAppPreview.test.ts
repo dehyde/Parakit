@@ -5,11 +5,17 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
-import { createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
 
 function decodeDataUrlHtml(dataUrl: string): string {
 	const marker = 'data:text/html;base64,';
+	assert.ok(dataUrl.startsWith(marker));
+	return atob(dataUrl.slice(marker.length));
+}
+
+function decodeDataUrlSvg(dataUrl: string): string {
+	const marker = 'data:image/svg+xml;base64,';
 	assert.ok(dataUrl.startsWith(marker));
 	return atob(dataUrl.slice(marker.length));
 }
@@ -349,6 +355,16 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined), 'Add a repo to preview your app');
 	});
 
+	test('startup title names dependency install states', () => {
+		assert.deepStrictEqual([
+			getWorkbenchAppPreviewStartupTitle('installingDependencies', 'main'),
+			getWorkbenchAppPreviewStartupTitle('missingDependencies', undefined),
+		], [
+			'Installing dependencies for main',
+			'Preview dependencies need attention',
+		]);
+	});
+
 	test('startup page renders empty repo add actions', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'emptyRepo',
@@ -363,6 +379,21 @@ suite('Workbench App Preview', () => {
 		assert.match(html, /Open local folder/);
 		assert.match(html, /data-action="openLocalFolder"/);
 		assert.doesNotMatch(html, /Copy context for agent/);
+	});
+
+	test('startup page renders dependency install actions after install failure', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'missingDependencies',
+			title: getWorkbenchAppPreviewStartupTitle('missingDependencies', undefined),
+			message: 'Install failed.',
+			command: 'yarn install',
+			actions: ['retry', 'restart', 'logs'],
+		}));
+
+		assert.match(html, /Preview dependencies need attention/);
+		assert.match(html, /data-action="retry"/);
+		assert.match(html, /data-action="restart"/);
+		assert.match(html, /data-action="logs"/);
 	});
 
 	test('startup page keeps preview details collapsed behind show more info', () => {
@@ -403,9 +434,16 @@ suite('Workbench App Preview', () => {
 			message: 'Waiting for app response.',
 		}));
 
-		assert.match(html, /\.startup-animation-frame \{ width: 54px; height: 72px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; \}/);
-		assert.match(html, /\.startup-animation \{ width: 54px; height: 72px; object-fit: contain; overflow: visible; display: block; \}/);
+		assert.match(html, /\.startup-animation-frame \{ width: 54px; height: 76px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; \}/);
+		assert.match(html, /\.startup-animation \{ width: 54px; height: 76px; object-fit: contain; overflow: visible; display: block; \}/);
 		assert.match(html, /<span class="startup-animation-frame"><img class="startup-animation"/);
+	});
+
+	test('startup animation svg keeps stroke padding inside the image viewport', () => {
+		const svg = decodeDataUrlSvg(APP_PREVIEW_STARTUP_ANIMATION_SRC);
+
+		assert.match(svg, /<svg width="99" height="167" viewBox="0 0 99 167"/);
+		assert.match(svg, /<g id="parakit_animation_white" transform="translate\(4 4\)">/);
 	});
 
 	test('startup page uses workbench typography and pure blue accent styling', () => {
@@ -720,6 +758,16 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Error: listen EADDRINUSE: address already in use 127.0.0.1:4821', 4821), true);
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Error: listen EADDRINUSE: address already in use 127.0.0.1:5173', 4821), false);
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Compiled successfully on port 4821', 4821), false);
+	});
+
+	test('classifies terminal startup failures', () => {
+		assert.deepStrictEqual([
+			classifyWorkbenchAppPreviewTerminalFailure('Error: listen EADDRINUSE: address already in use 127.0.0.1:4821', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('zsh: command not found: yarn', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('Error: Cannot find module vite', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('sh: ./node_modules/.bin/vite: Permission denied', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('ready in 1.2s', 4821),
+		], ['portConflict', 'missingBinary', 'moduleNotFound', 'permissionDenied', 'unknown']);
 	});
 
 	test('health failures do not restart a live preview server process', () => {

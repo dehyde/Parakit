@@ -35,6 +35,7 @@ import { isWeb } from '../../../../base/common/platform.js';
 import { IOnboardingService } from '../../welcomeOnboarding/common/onboardingService.js';
 import { ONBOARDING_STORAGE_KEY } from '../../welcomeOnboarding/common/onboardingTypes.js';
 import { IChatEntitlementService } from '../../../services/chat/common/chatEntitlementService.js';
+import { GetDesignerReposStateCommandId, shouldSuppressDesignerStartupWelcome as shouldSuppressDesignerStartupWelcomeForState, type DesignerRepoState } from '../../../services/workspaces/common/designerRepoCommands.js';
 
 export const restoreWalkthroughsConfigurationKey = 'workbench.welcomePage.restorableWalkthroughs';
 export type RestoreWalkthroughsConfigurationValue = { folder: string; category?: string; step?: string };
@@ -131,7 +132,8 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 			this.storageService.store(telemetryOptOutStorageKey, true, StorageScope.PROFILE, StorageTarget.USER);
 		}
 
-		if (this.tryOpenWalkthroughForFolder()) {
+		const suppressDesignerStartupWelcome = await this.shouldSuppressDesignerStartupWelcome();
+		if (!suppressDesignerStartupWelcome && this.tryOpenWalkthroughForFolder()) {
 			return;
 		}
 
@@ -143,13 +145,25 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 				const startupEditorSetting = this.configurationService.inspect<string>(configurationKey);
 
 				if (startupEditorSetting.value === 'readme') {
-					await this.openReadme();
+					await this.openReadme(suppressDesignerStartupWelcome);
 				} else if (startupEditorSetting.value === 'welcomePage' || startupEditorSetting.value === 'welcomePageInEmptyWorkbench') {
+					if (suppressDesignerStartupWelcome) {
+						return;
+					}
 					await this.openGettingStarted(true);
 				} else if (startupEditorSetting.value === 'terminal') {
 					this.commandService.executeCommand(TerminalCommandId.CreateTerminalEditor);
 				}
 			}
+		}
+	}
+
+	private async shouldSuppressDesignerStartupWelcome(): Promise<boolean> {
+		try {
+			const repoState = await this.commandService.executeCommand<DesignerRepoState>(GetDesignerReposStateCommandId);
+			return shouldSuppressDesignerStartupWelcomeForState(repoState);
+		} catch {
+			return false;
 		}
 	}
 
@@ -174,7 +188,7 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 		return false;
 	}
 
-	private async openReadme() {
+	private async openReadme(suppressWelcomeFallback = false) {
 		const readmes = arrays.coalesce(
 			await Promise.all(this.contextService.getWorkspace().folders.map(
 				async folder => {
@@ -197,7 +211,9 @@ export class StartupPageRunnerContribution extends Disposable implements IWorkbe
 				]);
 			} else {
 				// If no readme is found, default to showing the welcome page.
-				await this.openGettingStarted();
+				if (!suppressWelcomeFallback) {
+					await this.openGettingStarted();
+				}
 			}
 		}
 	}

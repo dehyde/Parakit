@@ -46,7 +46,10 @@ suite('BrowserOverlayManager', () => {
 
 		const overlays = manager.getOverlappingOverlays(browserContainer);
 
-		assert.deepStrictEqual(overlays.map(o => o.type), [BrowserOverlayType.Dialog]);
+		assert.deepStrictEqual(overlays.map(o => ({
+			type: o.type,
+			pausesBrowser: o.pausesBrowser
+		})), [{ type: BrowserOverlayType.Dialog, pausesBrowser: true }]);
 	});
 
 	test('does not detect an overlay that does not overlap the browser container', () => {

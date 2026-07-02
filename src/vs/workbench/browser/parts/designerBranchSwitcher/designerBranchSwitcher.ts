@@ -12,84 +12,13 @@ import { CommandsRegistry, ICommandService } from '../../../../platform/commands
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { localize } from '../../../../nls.js';
-import { GetDesignerReposStateCommandId, type DesignerRepoItem, type DesignerRepoState } from '../../../services/workspaces/common/designerRepoCommands.js';
+import { GetDesignerBranchesStateCommandId, GetDesignerReposStateCommandId, SaveAndCheckoutDesignerBranchCommandId, SaveAndSwitchDesignerRepoCommandId, SwitchDesignerRepoCommandId, CheckoutDesignerBranchCommandId, type DesignerBranchCheckoutResult, type DesignerBranchItem, type DesignerBranchSetup, type DesignerBranchState, type DesignerBranchTreeNode, type DesignerRepoItem, type DesignerRepoRemoveResult, type DesignerRepoState, type DesignerRepoSwitchResult, type DesignerSyncState } from '../../../services/workspaces/common/designerRepoCommands.js';
 
 const onDidChangeDesignerBranchStateEmitter = new Emitter<DesignerBranchState>();
 
 CommandsRegistry.registerCommand('_designerBranches.didChangeState', (_accessor, state: DesignerBranchState) => {
 	onDidChangeDesignerBranchStateEmitter.fire(state);
 });
-
-type DesignerBranchStatus = 'synced' | 'remoteOnly' | 'localOnly' | 'problem';
-
-interface DesignerBranchItem {
-	readonly name: string;
-	readonly path: readonly string[];
-	readonly status: DesignerBranchStatus;
-	readonly isCurrent: boolean;
-	readonly isDefault: boolean;
-	readonly cloudProblem?: DesignerCloudProblem;
-}
-
-interface DesignerCloudProblem {
-	readonly message: string;
-}
-
-interface DesignerBranchTreeNode {
-	readonly name: string;
-	readonly path: readonly string[];
-	readonly branch?: DesignerBranchItem;
-	readonly children: readonly DesignerBranchTreeNode[];
-}
-
-interface DesignerBranchState {
-	readonly projectName: string;
-	readonly defaultBranch: string | undefined;
-	readonly currentBranch: string | undefined;
-	readonly cloudProblem?: DesignerCloudProblem;
-	readonly syncState: 'synced' | 'syncing' | 'problem';
-	readonly repositoryReady?: boolean;
-	readonly setup?: DesignerBranchSetup;
-	readonly branches: readonly DesignerBranchItem[];
-	readonly tree: readonly DesignerBranchTreeNode[];
-}
-
-interface DesignerBranchSetup {
-	readonly reason: 'notGitRepository';
-}
-
-type DesignerSyncState = 'idle' | 'saving' | 'pushing' | 'synced' | 'blocked' | 'problem';
-
-interface DesignerSyncStatus {
-	readonly state: DesignerSyncState;
-	readonly message?: string;
-	readonly previousBranch?: string;
-	readonly targetBranch?: string;
-	readonly targetRepoPath?: string;
-	readonly agentPrompt?: string;
-}
-
-interface DesignerBranchCheckoutResult {
-	readonly state: DesignerBranchState;
-	readonly sync?: DesignerSyncStatus;
-	readonly blocked?: {
-		readonly reason: 'dirtyWorkTree' | 'worktreeBranchAlreadyUsed' | 'branchNameRequired' | 'mergeConflicts' | 'noRemote' | 'pushRejected' | 'authRequired' | 'saveFailed' | 'switchFailed' | 'unsafeHostRepository';
-		readonly message: string;
-	};
-}
-
-interface DesignerRepoSwitchResult {
-	readonly state: DesignerRepoState;
-	readonly sync?: DesignerSyncStatus;
-	readonly blocked?: {
-		readonly reason: 'branchNameRequired' | 'mergeConflicts' | 'noRemote' | 'pushRejected' | 'authRequired' | 'saveFailed' | 'switchFailed' | 'unsafeHostRepository';
-		readonly message: string;
-	};
-}
-
-interface DesignerRepoRemoveResult {
-	readonly state: DesignerRepoState;
-}
 
 export class DesignerBranchSwitcher extends Disposable {
 
@@ -349,7 +278,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private async doRefresh(options: { updateRemotes?: boolean; retryDuringStartup?: boolean }): Promise<void> {
-		this.state = await this.commandService.executeCommand<DesignerBranchState>('_designerBranches.getState', { updateRemotes: options.updateRemotes === true });
+		this.state = await this.commandService.executeCommand<DesignerBranchState>(GetDesignerBranchesStateCommandId, { updateRemotes: options.updateRemotes === true });
 		this.projectAccessLimited = false;
 		if (this.state?.repositoryReady === false && !this.state.setup) {
 			this.scheduleStartupRefreshRetry(options);
@@ -1107,7 +1036,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>('_designerBranches.saveAndCheckout', { branchName });
+			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>(SaveAndCheckoutDesignerBranchCommandId, { branchName });
 			if (!result) {
 				throw new Error(localize('designerBranchSwitcherSaveAndCheckoutFailed', "Branch could not be saved and switched."));
 			}
@@ -1149,7 +1078,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>('_designerBranches.checkout', { branchName, skipSave: true });
+			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>(CheckoutDesignerBranchCommandId, { branchName, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerBranchSwitcherCheckoutFailed', "Branch could not be switched."));
 			}
@@ -1184,7 +1113,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>('_designerRepos.saveAndSwitch', { repoPath });
+			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SaveAndSwitchDesignerRepoCommandId, { repoPath });
 			if (!result) {
 				throw new Error(localize('designerRepoSwitcherSwitchFailed', "Repo could not be opened."));
 			}
@@ -1223,7 +1152,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>('_designerRepos.switch', { repoPath, skipSave: true });
+			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SwitchDesignerRepoCommandId, { repoPath, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerRepoSwitcherSwitchFailed', "Repo could not be opened."));
 			}

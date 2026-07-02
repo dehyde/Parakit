@@ -80,7 +80,7 @@ suite('BrowserEditorScenarioFeatures', () => {
 		});
 	});
 
-	test('reports the variants panel as a menu overlay over the browser container', () => {
+	test('reports the variants panel as a non-pausing menu overlay over the browser container', () => {
 		const browserContainer = $('.browser-container');
 		Object.assign(browserContainer.style, {
 			position: 'absolute',
@@ -106,7 +106,10 @@ suite('BrowserEditorScenarioFeatures', () => {
 		const manager = store.add(new BrowserOverlayManager(mainWindow));
 		const overlays = manager.getOverlappingOverlays(browserContainer);
 
-		assert.deepStrictEqual(overlays.map(overlay => overlay.type), [BrowserOverlayType.Menu]);
+		assert.deepStrictEqual(overlays.map(overlay => ({
+			type: overlay.type,
+			pausesBrowser: overlay.pausesBrowser
+		})), [{ type: BrowserOverlayType.Menu, pausesBrowser: false }]);
 	});
 
 	test('constrains a dragged variants panel inside the viewport', () => {
