@@ -23,6 +23,7 @@ If these MCP tools are available, use them before shell/browser alternatives:
 - `read_app_preview` - inspect the current App Preview page before selecting elements
 - `screenshot_app_preview` - capture the App Preview viewport or a specific element
 - `click_app_preview` - click an element inside App Preview
+- `inspect_app_preview_element` - inspect an element's component identity, matched CSS, design evidence, and optional hover/focus/active styles
 - `type_in_app_preview` - type text or press keys inside App Preview
 
 If these tools are not available, do not invent replacements. Use the fallback below.

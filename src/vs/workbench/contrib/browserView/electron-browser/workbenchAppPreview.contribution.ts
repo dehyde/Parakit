@@ -9,13 +9,16 @@ import { $, addDisposableListener, EventType } from '../../../../base/browser/do
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
 import { hash } from '../../../../base/common/hash.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { BrowserViewKind, IBrowserViewLoadingEvent, IBrowserViewLoadError } from '../../../../platform/browserView/common/browserView.js';
+import { BrowserViewKind, IElementData, IBrowserViewLoadingEvent, IBrowserViewLoadError } from '../../../../platform/browserView/common/browserView.js';
+import { CDPEvent, CDPRequest, CDPResponse, CDPTargetInfo, ICDPConnection } from '../../../../platform/browserView/common/cdp/types.js';
+import { extractNodeData } from '../../../../platform/browserView/common/cdpElementExtraction.js';
 import { IPlaywrightService } from '../../../../platform/browserView/common/playwrightService.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
@@ -31,6 +34,7 @@ import { IStorageService, StorageScope, StorageTarget } from '../../../../platfo
 import { ICommandDetectionCapability, ITerminalCommand, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
 import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
@@ -44,7 +48,8 @@ import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDepe
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
-import { IBrowserViewWorkbenchService } from '../common/browserView.js';
+import { IBrowserViewCDPService, IBrowserViewWorkbenchService } from '../common/browserView.js';
+import { IBrowserDesignElementService, IDesignElementPropertyGroup } from '../common/browserDesignElementService.js';
 import { playwrightInvokeRaw } from './tools/browserToolHelpers.js';
 
 const APP_PREVIEW_ID_PREFIX = 'workbench-app-preview-';
@@ -81,6 +86,7 @@ export { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCo
 export const ReadWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.readPage';
 export const ScreenshotWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.screenshot';
 export const ClickWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.click';
+export const InspectElementWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.inspectElement';
 export const TypeWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.type';
 export const PreflightDesignerWorkspaceContextCommandId = '_designerWorkspaceContext.preflight';
 export const DesignerWorkspaceContextChangedCommandId = '_designerWorkspaceContext.didChange';
@@ -180,6 +186,94 @@ interface IAppPreviewScreenshotCommandArgs {
 	selector?: string;
 	element?: string;
 	scrollIntoViewIfNeeded?: boolean;
+}
+
+interface IAppPreviewInspectElementCommandArgs {
+	ref?: string;
+	selector?: string;
+	states?: readonly string[];
+}
+
+type IAppPreviewInspectElementResult = IElementData & {
+	readonly propertyGroups: readonly IDesignElementPropertyGroup[];
+};
+
+interface ICDPRequestSequence {
+	value: number;
+}
+
+function isCDPResponse(message: CDPResponse | CDPEvent): message is CDPResponse {
+	return typeof (message as CDPResponse).id === 'number';
+}
+
+function nextCDPRequestId(sequence: ICDPRequestSequence): number {
+	const id = sequence.value;
+	sequence.value++;
+	return id;
+}
+
+async function sendAppPreviewCDPCommand(
+	browserViewCDPService: IBrowserViewCDPService,
+	groupId: string,
+	store: DisposableStore,
+	sequence: ICDPRequestSequence,
+	method: string,
+	params?: unknown,
+	sessionId?: string
+): Promise<unknown> {
+	const id = nextCDPRequestId(sequence);
+	return new Promise<unknown>((resolve, reject) => {
+		const listener = browserViewCDPService.onCDPMessage(groupId)(message => {
+			if (!isCDPResponse(message) || message.id !== id) {
+				return;
+			}
+			listener.dispose();
+			if (message.error) {
+				reject(new Error(message.error.message));
+				return;
+			}
+			resolve(message.result ?? {});
+		});
+		store.add(listener);
+
+		const request: CDPRequest = { id, method, params, sessionId };
+		browserViewCDPService.sendCDPMessage(groupId, request).catch(error => {
+			listener.dispose();
+			reject(error);
+		});
+	});
+}
+
+class AppPreviewCDPConnection extends Disposable implements ICDPConnection {
+	private readonly _onEvent = this._register(new Emitter<CDPEvent>());
+	readonly onEvent: Event<CDPEvent> = this._onEvent.event;
+
+	private readonly _onClose = this._register(new Emitter<void>());
+	readonly onClose: Event<void> = this._onClose.event;
+
+	constructor(
+		private readonly browserViewCDPService: IBrowserViewCDPService,
+		private readonly groupId: string,
+		private readonly store: DisposableStore,
+		private readonly sequence: ICDPRequestSequence,
+		readonly sessionId: string,
+		readonly targetId: string
+	) {
+		super();
+		this._register(browserViewCDPService.onCDPMessage(groupId)(message => {
+			if (isCDPResponse(message) || message.sessionId !== this.sessionId) {
+				return;
+			}
+			this._onEvent.fire(message);
+		}));
+		this._register(browserViewCDPService.onDidDestroy(groupId)(() => {
+			this._onClose.fire();
+		}));
+	}
+
+	sendCommand(method: string, params?: unknown, sessionId: string | undefined = this.sessionId): Promise<unknown> {
+		return sendAppPreviewCDPCommand(this.browserViewCDPService, this.groupId, this.store, this.sequence, method, params, sessionId);
+	}
 }
 
 function getWorkspaceRoot(workspaceContextService: IWorkspaceContextService): URI | undefined {
@@ -834,6 +928,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		@ILocalGitService private readonly _localGitService: ILocalGitService,
 		@ILogService private readonly _logService: ILogService,
 		@IPlaywrightService private readonly _playwrightService: IPlaywrightService,
+		@IBrowserViewCDPService private readonly _browserViewCDPService: IBrowserViewCDPService,
+		@IBrowserDesignElementService private readonly _browserDesignElementService: IBrowserDesignElementService,
 		@ILanguageModelToolsService private readonly _toolsService: ILanguageModelToolsService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@IChatSessionsService private readonly _chatSessionsService: IChatSessionsService,
@@ -2042,6 +2138,86 @@ export class WorkbenchAppPreviewController extends Disposable {
 		};
 	}
 
+	async inspectAppPreviewElement(args?: IAppPreviewInspectElementCommandArgs): Promise<IAppPreviewInspectElementResult> {
+		const preview = await this._requireTrackedPreview();
+		const selector = args?.ref ? `aria-ref=${args.ref}` : args?.selector;
+		if (!selector) {
+			throw new Error('Either a "ref" or "selector" parameter is required.');
+		}
+
+		const states = Array.isArray(args?.states) ? args.states.filter((state): state is string => typeof state === 'string') : undefined;
+		const markerAttribute = 'data-parakit-inspect-marker';
+		const markerId = generateUuid();
+		const groupStore = new DisposableStore();
+		let groupId: string | undefined;
+		let sessionId: string | undefined;
+
+		try {
+			await playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page, sel, attr, id) => page.locator(sel).evaluate((element, marker) => {
+				const [attrName, attrValue] = marker as [string, string];
+				element.setAttribute(attrName, attrValue);
+			}, [attr, id]), selector, markerAttribute, markerId);
+
+			groupId = await this._browserViewCDPService.createSessionGroup(preview.id);
+			const sequence: ICDPRequestSequence = { value: 1 };
+			const { targetInfos } = await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.getTargets') as { targetInfos?: CDPTargetInfo[] };
+			const targets = targetInfos ?? [];
+			const target = targets.find(target => target.type === 'page') ?? targets[0];
+			if (!target) {
+				throw new Error('Could not resolve a CDP target for this App Preview tab.');
+			}
+
+			const attachResult = await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.attachToTarget', {
+				targetId: target.targetId,
+				flatten: true
+			}) as { sessionId?: string };
+			if (!attachResult.sessionId) {
+				throw new Error('Could not attach a CDP session to the App Preview tab.');
+			}
+			sessionId = attachResult.sessionId;
+
+			const connection = groupStore.add(new AppPreviewCDPConnection(this._browserViewCDPService, groupId, groupStore, sequence, sessionId, target.targetId));
+			await connection.sendCommand('DOM.enable');
+			await connection.sendCommand('CSS.enable');
+			await connection.sendCommand('Runtime.enable');
+
+			const { root } = await connection.sendCommand('DOM.getDocument') as { root?: { nodeId?: number } };
+			if (typeof root?.nodeId !== 'number') {
+				throw new Error('Could not read the App Preview DOM root.');
+			}
+
+			const { nodeId } = await connection.sendCommand('DOM.querySelector', {
+				nodeId: root.nodeId,
+				selector: `[${markerAttribute}="${markerId}"]`,
+			}) as { nodeId?: number };
+			if (!nodeId) {
+				throw new Error(`Could not locate an element matching "${selector}" for inspection.`);
+			}
+
+			const elementData = await extractNodeData(connection, { nodeId }, { states });
+			const { propertyGroups } = await this._browserDesignElementService.inspectElement(elementData);
+			return { ...elementData, propertyGroups };
+		} finally {
+			await playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page, sel, attr) => page.locator(sel).evaluate((element, attrName) => {
+				element.removeAttribute(attrName);
+			}, attr), selector, markerAttribute).catch(() => {
+				// Best effort cleanup.
+			});
+			if (groupId && sessionId) {
+				const sequence: ICDPRequestSequence = { value: 1_000_000 };
+				await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.detachFromTarget', { sessionId }).catch(() => {
+					// Best effort cleanup.
+				});
+			}
+			if (groupId) {
+				await this._browserViewCDPService.destroySessionGroup(groupId).catch(() => {
+					// Best effort cleanup.
+				});
+			}
+			groupStore.dispose();
+		}
+	}
+
 	async typeInAppPreview(args?: IAppPreviewTypeCommandArgs): Promise<{ pageId: string; summary: string }> {
 		const preview = await this._requireTrackedPreview();
 		let selector = args?.selector;
@@ -2098,6 +2274,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		this._register(CommandsRegistry.registerCommand(ReadWorkbenchAppPreviewCommandId, () => this.readAppPreview()));
 		this._register(CommandsRegistry.registerCommand(ScreenshotWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewScreenshotCommandArgs) => this.screenshotAppPreview(args)));
 		this._register(CommandsRegistry.registerCommand(ClickWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewClickCommandArgs) => this.clickAppPreview(args)));
+		this._register(CommandsRegistry.registerCommand(InspectElementWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewInspectElementCommandArgs) => this.inspectAppPreviewElement(args)));
 		this._register(CommandsRegistry.registerCommand(TypeWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewTypeCommandArgs) => this.typeInAppPreview(args)));
 		this._register(CommandsRegistry.registerCommand(PreflightDesignerWorkspaceContextCommandId, () => this.preflightDesignerWorkspaceContext()));
 		this._register(CommandsRegistry.registerCommand(DesignerWorkspaceContextChangedCommandId, (_accessor, context?: IDesignerWorkspaceContext) => this.reconcileDesignerWorkspaceContext(context)));

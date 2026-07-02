@@ -7,7 +7,7 @@
 /* eslint-disable no-restricted-syntax */
 
 // Only `import type` is allowed in preload scripts — Electron preloads cannot resolve module imports at runtime.
-import type { IBrowserViewTheme, IBrowserViewRect } from '../common/browserView.js';
+import type { IBrowserViewTheme, IBrowserViewRect, IBrowserViewInspectorPanelPayload } from '../common/browserView.js';
 
 /**
  * Preload script for pages loaded in Integrated Browser
@@ -186,6 +186,12 @@ function init() {
 	ipcRenderer.on('vscode:browserView:hideHighlight', (_event: unknown) => {
 		elementPicker.hideHighlight();
 	});
+	ipcRenderer.on('vscode:browserView:showInspectorPanel', (_event: unknown, payload: IBrowserViewInspectorPanelPayload) => {
+		elementPicker.showInspectorPanel(payload);
+	});
+	ipcRenderer.on('vscode:browserView:hideInspectorPanel', (_event: unknown) => {
+		elementPicker.hideInspectorPanel();
+	});
 
 	const getElement = (id: string): Element | null => {
 		switch (id) {
@@ -351,7 +357,9 @@ class ElementPicker {
 	private readonly _labelSelector: HTMLSpanElement;
 	private readonly _labelClasses: HTMLSpanElement;
 	private readonly _labelDims: HTMLSpanElement;
+	private readonly _inspectorPanel: HTMLDivElement;
 	private readonly _dragbox: HTMLDivElement;
+	private _inspectorPanelVisible = false;
 
 	// Interaction state (reset on stop)
 	private _dragStart: { x: number; y: number } | undefined;
@@ -419,6 +427,12 @@ class ElementPicker {
 		label.appendChild(labelDims);
 		this._labelDims = labelDims;
 
+		const inspectorPanel = document.createElement('div');
+		inspectorPanel.className = 'inspector-panel';
+		inspectorPanel.style.display = 'none';
+		root.appendChild(inspectorPanel);
+		this._inspectorPanel = inspectorPanel;
+
 		const dragbox = document.createElement('div');
 		dragbox.className = 'dragbox';
 		dragbox.style.display = 'none';
@@ -479,12 +493,15 @@ class ElementPicker {
 		this._highlight.style.display = 'none';
 		this._pinnedHighlight.style.display = 'none';
 		this._label.style.display = 'none';
+		this._inspectorPanel.style.display = 'none';
+		this._inspectorPanel.replaceChildren();
 		this._dragbox.style.display = 'none';
 		this._clearMeasurements();
 		this._dragStart = undefined;
 		this._dragStartTarget = undefined;
 		this._highlightTarget = undefined;
 		this._pinnedTarget = undefined;
+		this._inspectorPanelVisible = false;
 		this._measurementActive = false;
 
 		this._onStopped();
@@ -515,7 +532,73 @@ class ElementPicker {
 	 */
 	hideHighlight(): void {
 		this._updateHighlight(undefined);
-		if (!this._selectionActive && this._shadowHost.parentNode) {
+		if (!this._selectionActive && !this._inspectorPanelVisible && this._shadowHost.parentNode) {
+			this._shadowHost.remove();
+		}
+	}
+
+	showInspectorPanel(payload: IBrowserViewInspectorPanelPayload): void {
+		if (!this._shadowHost.parentNode) {
+			document.documentElement.appendChild(this._shadowHost);
+		}
+
+		const panel = this._inspectorPanel;
+		panel.replaceChildren();
+
+		if (payload.componentName) {
+			const nameElement = document.createElement('span');
+			nameElement.className = 'component-name';
+			nameElement.textContent = payload.componentName;
+			panel.appendChild(nameElement);
+		}
+
+		for (const group of payload.groups) {
+			if (!group.properties.length) {
+				continue;
+			}
+			const heading = document.createElement('div');
+			heading.className = 'group-heading';
+			heading.textContent = group.label;
+			panel.appendChild(heading);
+
+			for (const property of group.properties.slice(0, 8)) {
+				const row = document.createElement('div');
+				row.className = 'property-row';
+
+				const nameElement = document.createElement('span');
+				nameElement.className = 'property-name';
+				nameElement.textContent = property.name;
+
+				const valueElement = document.createElement('span');
+				valueElement.className = property.token ? 'property-token' : 'property-value';
+				valueElement.textContent = property.token ?? property.value;
+
+				row.append(nameElement, valueElement);
+				panel.appendChild(row);
+			}
+		}
+
+		this._inspectorPanelVisible = true;
+		panel.style.display = 'block';
+
+		const margin = 8;
+		const preferRight = payload.bounds.x < window.innerWidth / 2;
+		const panelWidth = panel.offsetWidth;
+		const panelHeight = panel.offsetHeight;
+		const top = Math.max(margin, Math.min(window.innerHeight - panelHeight - margin, payload.bounds.y));
+		const left = preferRight
+			? Math.min(window.innerWidth - panelWidth - margin, payload.bounds.x + payload.bounds.width + margin)
+			: Math.max(margin, payload.bounds.x - panelWidth - margin);
+
+		panel.style.top = `${top}px`;
+		panel.style.left = `${left}px`;
+	}
+
+	hideInspectorPanel(): void {
+		this._inspectorPanelVisible = false;
+		this._inspectorPanel.style.display = 'none';
+		this._inspectorPanel.replaceChildren();
+		if (!this._selectionActive && !this._highlightTarget && this._shadowHost.parentNode) {
 			this._shadowHost.remove();
 		}
 	}
@@ -923,6 +1006,54 @@ class ElementPicker {
 				border-radius: 2px;
 				outline: 1px solid var(--vscode-button-foreground, white);
 				outline-offset: -4px;
+			}
+			.inspector-panel {
+				position: fixed;
+				box-sizing: border-box;
+				pointer-events: none;
+				max-width: 280px;
+				max-height: 360px;
+				overflow: hidden auto;
+				background: rgba(30, 30, 30, 0.96);
+				color: #fff;
+				border: 1px solid rgba(255, 255, 255, 0.18);
+				border-radius: 6px;
+				padding: 8px 10px;
+				font: 11px/1.5 ui-monospace, "SF Mono", Menlo, monospace;
+				z-index: 4;
+				box-shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+			}
+			.inspector-panel .component-name {
+				display: block;
+				font-weight: 600;
+				font-size: 12px;
+				margin-bottom: 4px;
+			}
+			.inspector-panel .group-heading {
+				opacity: 0.66;
+				text-transform: uppercase;
+				font-size: 9px;
+				letter-spacing: 0.04em;
+				margin: 6px 0 2px;
+			}
+			.inspector-panel .property-row {
+				display: grid;
+				grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+				gap: 8px;
+				align-items: baseline;
+			}
+			.inspector-panel .property-name {
+				opacity: 0.8;
+			}
+			.inspector-panel .property-value,
+			.inspector-panel .property-token {
+				overflow: hidden;
+				text-overflow: ellipsis;
+				white-space: nowrap;
+				text-align: right;
+			}
+			.inspector-panel .property-token {
+				color: #7ee787;
 			}
 			.measurement-layer {
 				position: fixed; inset: 0;

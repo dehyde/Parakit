@@ -74,7 +74,14 @@ export interface IElementData {
 	readonly dimensions?: { readonly top: number; readonly left: number; readonly width: number; readonly height: number };
 	readonly innerText?: string;
 	readonly matchedStyleRules?: readonly IElementMatchedStyleRule[];
-	readonly reactComponents?: readonly IElementReactComponent[];
+	readonly components?: readonly IElementComponent[];
+	readonly states?: readonly IElementStateStyles[];
+}
+
+export interface IElementStateStyles {
+	readonly state: string;
+	readonly computedStyles: Record<string, string>;
+	readonly matchedStyleRules: readonly IElementMatchedStyleRule[];
 }
 
 export interface IElementMatchedStyleRule {
@@ -92,8 +99,11 @@ export interface IElementMatchedStyleProperty {
 	readonly value: string;
 }
 
-export interface IElementReactComponent {
+export type IElementComponentFramework = 'react' | 'vue' | 'web-component';
+
+export interface IElementComponent {
 	readonly name: string;
+	readonly framework: IElementComponentFramework;
 	readonly source?: string;
 	readonly props?: readonly IElementReactProp[];
 }
@@ -101,6 +111,24 @@ export interface IElementReactComponent {
 export interface IElementReactProp {
 	readonly name: string;
 	readonly value: string;
+}
+
+export interface IBrowserViewInspectorPanelProperty {
+	readonly name: string;
+	readonly value: string;
+	readonly token?: string;
+}
+
+export interface IBrowserViewInspectorPanelGroup {
+	readonly id: string;
+	readonly label: string;
+	readonly properties: readonly IBrowserViewInspectorPanelProperty[];
+}
+
+export interface IBrowserViewInspectorPanelPayload {
+	readonly componentName?: string;
+	readonly bounds: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+	readonly groups: readonly IBrowserViewInspectorPanelGroup[];
 }
 
 export interface IBrowserViewRect {
@@ -734,6 +762,8 @@ export interface IBrowserViewService {
 	 * @param enabled Whether to enable or disable. Omit to toggle.
 	 */
 	toggleElementSelection(id: string, enabled?: boolean): Promise<void>;
+	showElementInspectorPanel(id: string, payload: IBrowserViewInspectorPanelPayload): Promise<void>;
+	hideElementInspectorPanel(id: string): Promise<void>;
 
 	/**
 	 * Toggle drag-to-select area picking on the top frame of a browser view.

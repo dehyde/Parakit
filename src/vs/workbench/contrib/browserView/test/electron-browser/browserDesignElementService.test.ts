@@ -20,7 +20,7 @@ import { ISearchService } from '../../../../services/search/common/search.js';
 import { Extensions as ViewExtensions, IViewContainersRegistry, IViewsRegistry } from '../../../../common/views.js';
 import { TestViewsService } from '../../../../test/browser/workbenchTestServices.js';
 import '../../electron-browser/browserDesignElement.contribution.js';
-import { BROWSER_DESIGN_ELEMENT_CONTAINER_ID, BROWSER_DESIGN_ELEMENT_VIEW_ID, BrowserDesignElementService, compactDesignElementDomPath, createDesignElementSelection, createClaudeDesignElementPrompt, extractDesignElementTokenDefinitions, getDesignElementAttributeRows, normalizeDesignElementTokenValue, resolveDesignElementProperties } from '../../common/browserDesignElementService.js';
+import { BROWSER_DESIGN_ELEMENT_CONTAINER_ID, BROWSER_DESIGN_ELEMENT_VIEW_ID, BrowserDesignElementService, compactDesignElementDomPath, createDesignElementSelection, createClaudeDesignElementPrompt, extractDesignElementTokenDefinitions, getDesignElementAttributeRows, normalizeDesignElementTokenValue, parseStructuredTokenFile, resolveDesignElementProperties } from '../../common/browserDesignElementService.js';
 
 suite('BrowserDesignElementService', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -57,13 +57,15 @@ suite('BrowserDesignElementService', () => {
 			{ tagName: 'body' },
 			{ tagName: 'button', classNames: ['primary', 'px-4'] }
 		],
-		reactComponents: [{
+		components: [{
 			name: 'ItemActions',
+			framework: 'react',
 			props: [
 				{ name: 'itemId', value: 'item-1' }
 			]
 		}, {
 			name: 'PrimaryButton',
+			framework: 'react',
 			source: '@example/ui',
 			props: [
 				{ name: 'intent', value: 'primary' }
@@ -114,9 +116,11 @@ suite('BrowserDesignElementService', () => {
 
 		const service = store.add(instantiationService.createInstance(BrowserDesignElementService));
 
-		await service.inspectElement(elementData);
+		const result = await service.inspectElement(elementData);
 
 		assert.strictEqual(contextKeyService.getContextKeyValue('browserDesignElementSelected'), true);
+		assert.ok(result.propertyGroups.length > 0);
+		assert.strictEqual(result.selection.displayName, service.selection?.displayName);
 
 		service.closeInspection();
 
@@ -321,6 +325,36 @@ suite('BrowserDesignElementService', () => {
 		assert.ok(definitions.some(definition => definition.name === '--button-fg' && definition.value === 'rgb(255, 255, 255)'));
 		assert.strictEqual(normalizeDesignElementTokenValue('rgb(255, 255, 255)'), '#ffffff');
 		assert.strictEqual(normalizeDesignElementTokenValue('#fff'), '#ffffff');
+	});
+
+	test('parseStructuredTokenFile reads W3C Design Tokens format', () => {
+		const definitions = parseStructuredTokenFile(JSON.stringify({
+			color: {
+				brand: { $value: '#0057ff', $type: 'color' },
+			},
+			spacing: {
+				medium: { $value: '16px', $type: 'dimension' },
+			},
+		}), 'tokens.json');
+
+		assert.ok(definitions.some(definition => definition.name === 'color.brand' && definition.value === '#0057ff'));
+		assert.ok(definitions.some(definition => definition.name === 'spacing.medium' && definition.value === '16px'));
+	});
+
+	test('parseStructuredTokenFile reads generic nested JSON theme objects', () => {
+		const definitions = parseStructuredTokenFile(JSON.stringify({
+			colors: { brand: '#0057ff' },
+			spacing: { medium: '16px' },
+		}), 'theme.json');
+
+		assert.ok(definitions.some(definition => definition.name === 'colors.brand' && definition.value === '#0057ff'));
+		assert.ok(definitions.some(definition => definition.name === 'spacing.medium' && definition.value === '16px'));
+	});
+
+	test('parseStructuredTokenFile returns empty array for non-JSON or non-object content', () => {
+		assert.deepStrictEqual(parseStructuredTokenFile('not json', 'notes.json'), []);
+		assert.deepStrictEqual(parseStructuredTokenFile('[]', 'array.json'), []);
+		assert.deepStrictEqual(parseStructuredTokenFile('{}', 'not-a-token-file.ts'), []);
 	});
 
 	test('createClaudeDesignElementPrompt summarizes source-backed context before raw css details', () => {

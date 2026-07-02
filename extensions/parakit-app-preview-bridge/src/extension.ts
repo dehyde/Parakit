@@ -122,6 +122,9 @@ async function runOperation(route: string, payload: unknown): Promise<unknown> {
 		case '/click_app_preview':
 		case '/click':
 			return vscode.commands.executeCommand('workbench.action.appPreview.click', args);
+		case '/inspect_app_preview_element':
+		case '/inspect':
+			return vscode.commands.executeCommand('workbench.action.appPreview.inspectElement', args);
 		case '/type_in_app_preview':
 		case '/type':
 			return vscode.commands.executeCommand('workbench.action.appPreview.type', args);

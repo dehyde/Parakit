@@ -4,36 +4,17 @@
  *--------------------------------------------------------------------------------------------*/
 
 import { Emitter, Event } from '../../../base/common/event.js';
-import { Disposable, DisposableStore, IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
-import { IElementData, IElementAncestor, IBrowserViewTheme, IElementMatchedStyleRule, IElementReactComponent } from '../common/browserView.js';
-import { collapseToShorthands, formatMatchedStyles, keyComputedProperties, type IMatchedStyles } from '../common/cssHelpers.js';
+import { Disposable, IDisposable, MutableDisposable } from '../../../base/common/lifecycle.js';
+import { IElementData, IBrowserViewTheme } from '../common/browserView.js';
 import { ICDPConnection } from '../common/cdp/types.js';
+import { extractNodeData as extractNodeDataFromConnection } from '../common/cdpElementExtraction.js';
+
+export { captureElementStates, extractMatchedStyleRules, extractNodeData } from '../common/cdpElementExtraction.js';
 
 export interface IFrameElementHandle extends IDisposable {
 	addToChat(): Promise<void>;
 	highlight(): Promise<void>;
 	hideHighlight(): Promise<void>;
-}
-
-type Quad = [number, number, number, number, number, number, number, number];
-
-interface IBoxModel {
-	content: Quad;
-	padding: Quad;
-	border: Quad;
-	margin: Quad;
-	width: number;
-	height: number;
-}
-
-interface INode {
-	nodeId: number;
-	backendNodeId: number;
-	parentId?: number;
-	localName: string;
-	attributes: string[];
-	children?: INode[];
-	pseudoElements?: INode[];
 }
 
 interface ILayoutMetricsResult {
@@ -82,12 +63,6 @@ export const inspectHighlightConfig = {
 		flexibilityArrow: { color: { r: 130, g: 190, b: 255 } }
 	},
 };
-
-function useScopedDisposal() {
-	const store = new DisposableStore() as DisposableStore & { [Symbol.dispose](): void };
-	store[Symbol.dispose] = () => store.dispose();
-	return store;
-}
 
 /**
  * Per-frame element inspector backed by a dedicated CDP session.
@@ -295,8 +270,8 @@ export class BrowserViewFrameInspector extends Disposable {
 	/**
 	 * Extract full element data from a CDP node reference.
 	 */
-	async extractNodeData(id: { backendNodeId?: number; objectId?: string }): Promise<IElementData> {
-		const data = await extractNodeData(this.connection, id);
+	async extractNodeData(id: { nodeId?: number; backendNodeId?: number; objectId?: string }, options?: { readonly states?: readonly string[] }): Promise<IElementData> {
+		const data = await extractNodeDataFromConnection(this.connection, id, options);
 		return { ...data, url: this.frame.url };
 	}
 
@@ -343,266 +318,4 @@ export class BrowserViewFrameInspector extends Disposable {
 			}
 		};
 	}
-}
-
-export async function extractNodeData(connection: ICDPConnection, id: { backendNodeId?: number; objectId?: string }): Promise<IElementData> {
-	using store = useScopedDisposal();
-
-	const discoveredNodesByNodeId: Record<number, INode> = {};
-	store.add(connection.onEvent(event => {
-		if (event.method === 'DOM.setChildNodes') {
-			const { nodes } = event.params as { nodes: INode[] };
-			for (const node of nodes) {
-				discoveredNodesByNodeId[node.nodeId] = node;
-				if (node.children) {
-					for (const child of node.children) {
-						discoveredNodesByNodeId[child.nodeId] = {
-							...child,
-							parentId: node.nodeId
-						};
-					}
-				}
-				if (node.pseudoElements) {
-					for (const pseudo of node.pseudoElements) {
-						discoveredNodesByNodeId[pseudo.nodeId] = {
-							...pseudo,
-							parentId: node.nodeId
-						};
-					}
-				}
-			}
-		}
-	}));
-
-	await connection.sendCommand('DOM.getDocument');
-
-	const { node } = await connection.sendCommand('DOM.describeNode', id) as { node: INode };
-	if (!node) {
-		throw new Error('Failed to describe node.');
-	}
-	let nodeId = node.nodeId;
-	if (!nodeId) {
-		const { nodeIds } = await connection.sendCommand('DOM.pushNodesByBackendIdsToFrontend', { backendNodeIds: [node.backendNodeId] }) as { nodeIds: number[] };
-		if (!nodeIds?.length) {
-			throw new Error('Failed to get node ID.');
-		}
-		nodeId = nodeIds[0];
-	}
-
-	const { model } = await connection.sendCommand('DOM.getBoxModel', { nodeId }) as { model: IBoxModel };
-	if (!model) {
-		throw new Error('Failed to get box model.');
-	}
-
-	const content = model.content;
-	const margin = model.margin;
-	const x = Math.min(margin[0], content[0]);
-	const y = Math.min(margin[1], content[1]);
-	const width = Math.max(margin[2] - margin[0], content[2] - content[0]);
-	const height = Math.max(margin[5] - margin[1], content[5] - content[1]);
-
-	const matched = await connection.sendCommand('CSS.getMatchedStylesForNode', { nodeId });
-	if (!matched) {
-		throw new Error('Failed to get matched css.');
-	}
-
-	const { rulesText, referencedVars, authorPropertyNames, userAgentPropertyNames } = formatMatchedStyles(matched as IMatchedStyles);
-	const matchedStyleRules = extractMatchedStyleRules(matched as IMatchedStyles);
-	const { outerHTML } = await connection.sendCommand('DOM.getOuterHTML', { nodeId }) as { outerHTML: string };
-	if (!outerHTML) {
-		throw new Error('Failed to get outerHTML.');
-	}
-	const reactComponents = await extractReactComponents(connection, nodeId).catch(() => undefined);
-
-	const attributes = attributeArrayToRecord(node.attributes);
-
-	const ancestors: IElementAncestor[] = [];
-	let currentNode: INode | undefined = discoveredNodesByNodeId[nodeId] ?? node;
-	while (currentNode) {
-		const attributes = attributeArrayToRecord(currentNode.attributes);
-		ancestors.unshift({
-			tagName: currentNode.localName,
-			id: attributes.id,
-			classNames: attributes.class?.trim().split(/\s+/).filter(Boolean)
-		});
-		currentNode = currentNode.parentId ? discoveredNodesByNodeId[currentNode.parentId] : undefined;
-	}
-
-	// Build the computed style string and filtered computedStyles record
-	let computedStyle = rulesText;
-	let computedStyles: Record<string, string> | undefined;
-	try {
-		const { computedStyle: computedStyleArray } = await connection.sendCommand('CSS.getComputedStyleForNode', { nodeId }) as { computedStyle?: Array<{ name: string; value: string }> };
-		if (computedStyleArray) {
-			computedStyles = {};
-
-			// Collect resolved property values into a map for shorthand collapsing
-			const resolvedMap = new Map<string, string>();
-			const varLines: string[] = [];
-
-			for (const prop of computedStyleArray) {
-				if (!prop.name || typeof prop.value !== 'string') {
-					continue;
-				}
-
-				// Include in computedStyles record: referenced vars + key UI properties
-				if (referencedVars.has(prop.name) || keyComputedProperties.has(prop.name)) {
-					computedStyles[prop.name] = prop.value;
-				}
-
-				// Include in resolved values: any property explicitly set by stylesheets
-				if (authorPropertyNames.has(prop.name)) {
-					resolvedMap.set(prop.name, prop.value);
-				} else if (userAgentPropertyNames.has(prop.name)) {
-					resolvedMap.set(prop.name, `${prop.value} /*UA*/`); // Mark it as coming from User Agent styles.
-				}
-
-				// Include referenced CSS variable values
-				if (referencedVars.has(prop.name)) {
-					varLines.push(`${prop.name}: ${prop.value};`);
-				}
-			}
-
-			if (resolvedMap.size > 0) {
-				const resolvedLines = collapseToShorthands(resolvedMap);
-				computedStyle += '\n\n/* Resolved values */\n' + resolvedLines.join('\n');
-			}
-			if (varLines.length > 0) {
-				computedStyle += '\n\n/* CSS variables */\n' + varLines.join('\n');
-			}
-		}
-	} catch { }
-
-	return {
-		outerHTML,
-		computedStyle,
-		bounds: { x, y, width, height },
-		ancestors,
-		attributes,
-		computedStyles,
-		dimensions: { top: y, left: x, width, height },
-		matchedStyleRules,
-		reactComponents
-	};
-}
-
-async function extractReactComponents(connection: ICDPConnection, nodeId: number): Promise<readonly IElementReactComponent[] | undefined> {
-	const { object } = await connection.sendCommand('DOM.resolveNode', { nodeId }) as { object?: { objectId?: string } };
-	if (!object?.objectId) {
-		return undefined;
-	}
-
-	const { result } = await connection.sendCommand('Runtime.callFunctionOn', {
-		objectId: object.objectId,
-		returnByValue: true,
-		functionDeclaration: `function() {
-			const scalar = value => {
-				if (value === undefined || value === null) {
-					return undefined;
-				}
-				const type = typeof value;
-				if (type === 'string' || type === 'number' || type === 'boolean') {
-					return String(value);
-				}
-				if (Array.isArray(value)) {
-					return value.filter(item => ['string', 'number', 'boolean'].includes(typeof item)).slice(0, 4).join(', ');
-				}
-				return undefined;
-			};
-			const componentName = type => {
-				if (!type) {
-					return undefined;
-				}
-				if (typeof type === 'string') {
-					return type;
-				}
-				return type.displayName || type.name || type.render?.displayName || type.render?.name || type.type?.displayName || type.type?.name;
-			};
-			const sourceName = type => type?._context?.displayName || type?.Provider?._context?.displayName;
-			const fiberKey = element => Object.keys(element).find(key => key.startsWith('__reactFiber$') || key.startsWith('__reactInternalInstance$'));
-			let element = this;
-			let fiber;
-			for (let current = element; current && !fiber; current = current.parentElement) {
-				const key = fiberKey(current);
-				if (key) {
-					fiber = current[key];
-				}
-			}
-			const components = [];
-			const seen = new Set();
-			for (let current = fiber; current && components.length < 16; current = current.return) {
-				const name = componentName(current.elementType || current.type);
-				if (!name || seen.has(name)) {
-					continue;
-				}
-				seen.add(name);
-				const props = [];
-				const rawProps = current.memoizedProps || current.pendingProps || {};
-				for (const key of ['variant', 'size', 'color', 'type', 'role', 'aria-label', 'className', 'style', 'status', 'disabled']) {
-					const value = scalar(rawProps[key]);
-					if (value) {
-						props.push({ name: key, value: value.length > 120 ? value.slice(0, 117) + '...' : value });
-					}
-				}
-				components.push({ name, source: sourceName(current.elementType || current.type), props });
-			}
-			return components;
-		}`
-	}) as { result?: { value?: IElementReactComponent[] } };
-
-	return result?.value?.length ? result.value : undefined;
-}
-
-function extractMatchedStyleRules(matched: IMatchedStyles): readonly IElementMatchedStyleRule[] {
-	const rules: IElementMatchedStyleRule[] = [];
-	const seen = new Set<string>();
-	const addRule = (ruleEntry: unknown) => {
-		const rule = (ruleEntry as { rule?: { ruleId?: { styleSheetId?: string }; selectorList?: { selectors?: Array<{ text?: string }> }; origin?: string; sourceURL?: string; style?: { cssText?: string; cssProperties?: Array<{ name?: string; value?: string; disabled?: boolean }> } } })?.rule;
-		const cssText = rule?.style?.cssText?.trim();
-		if (!rule || rule.origin === 'user-agent' || !cssText) {
-			return;
-		}
-		const selector = rule.selectorList?.selectors?.map(selector => selector.text).filter(Boolean).join(', ') ?? '';
-		const key = `${selector}\n${cssText}`;
-		if (!selector || seen.has(key)) {
-			return;
-		}
-		seen.add(key);
-		rules.push({
-			selector,
-			origin: rule.origin ?? 'regular',
-			cssText,
-			styleSheetId: rule.ruleId?.styleSheetId,
-			sourceURL: rule.sourceURL,
-			properties: (rule.style?.cssProperties ?? [])
-				.filter(property => !!property.name && !!property.value && !property.disabled)
-				.map(property => ({ name: property.name!, value: property.value! }))
-		});
-	};
-
-	for (const ruleEntry of matched.matchedCSSRules ?? []) {
-		addRule(ruleEntry);
-	}
-	for (const pseudo of matched.pseudoElements ?? []) {
-		for (const ruleEntry of pseudo.matches ?? []) {
-			addRule(ruleEntry);
-		}
-	}
-	for (const inherited of matched.inherited ?? []) {
-		for (const ruleEntry of inherited.matchedCSSRules ?? []) {
-			addRule(ruleEntry);
-		}
-	}
-
-	return rules.slice(0, 24);
-}
-
-function attributeArrayToRecord(attributes: string[]): Record<string, string> {
-	const record: Record<string, string> = {};
-	for (let i = 0; i < attributes.length; i += 2) {
-		const name = attributes[i];
-		const value = attributes[i + 1];
-		record[name] = value;
-	}
-	return record;
 }
