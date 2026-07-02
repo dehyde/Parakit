@@ -145,7 +145,7 @@ export const WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT = 150_000;
 
 export type WorkbenchAppPreviewStartupPhase = 'starting' | 'installingDependencies' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'missingDependencies' | 'setup' | 'emptyRepo';
 export type WorkbenchAppPreviewStartupStageStatus = 'done' | 'current' | 'pending';
-export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy' | 'pasteRepoUrl' | 'openLocalFolder';
+export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy' | 'configure' | 'pasteRepoUrl' | 'openLocalFolder';
 
 export interface IWorkbenchAppPreviewStartupStage {
 	readonly label: string;
@@ -248,8 +248,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
 <title>${escapeHtml(state.title)}</title>
 <style>
-	:root { color-scheme: light dark; --app-preview-accent: #0000ff; --app-preview-accent-hover: #0000d6; --app-preview-background: #ffffff; --app-preview-foreground: #1f1f1f; --app-preview-muted: rgba(31, 31, 31, 0.64); --app-preview-subtle: rgba(31, 31, 31, 0.48); --app-preview-border: rgba(31, 31, 31, 0.18); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
-	@media (prefers-color-scheme: dark) { :root { --app-preview-background: #1e1e1e; --app-preview-foreground: #f3f3f3; --app-preview-muted: rgba(243, 243, 243, 0.68); --app-preview-subtle: rgba(243, 243, 243, 0.5); --app-preview-border: rgba(243, 243, 243, 0.18); } }
+	:root { color-scheme: dark; --app-preview-accent: #0000ff; --app-preview-accent-hover: #0000d6; --app-preview-background: #1e1e1e; --app-preview-foreground: #f3f3f3; --app-preview-muted: rgba(243, 243, 243, 0.68); --app-preview-subtle: rgba(243, 243, 243, 0.5); --app-preview-border: rgba(243, 243, 243, 0.18); font-family: "IBM Plex Mono", monospace; font-size: 13px; }
 	body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--app-preview-background); color: var(--app-preview-foreground); font-family: inherit; font-size: 13px; }
 	main { width: min(560px, calc(100vw - 48px)); display: grid; gap: 18px; }
 	.status { display: flex; align-items: center; gap: 14px; }
@@ -299,6 +298,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		${actionButton('restart', 'Restart preview server')}
 		${actionButton('logs', 'Show terminal logs')}
 		${actionButton('copy', 'Copy context for agent')}
+		${actionButton('configure', 'Configure URL')}
 		${actionButton('pasteRepoUrl', 'Paste repo URL')}
 		${actionButton('openLocalFolder', 'Open local folder')}
 	</section>` : ''}

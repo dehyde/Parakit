@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
 
 function decodeDataUrlHtml(dataUrl: string): string {
@@ -460,6 +460,19 @@ suite('Workbench App Preview', () => {
 		assert.match(html, /button \{ appearance: none; border: 0; border-radius: 4px; background: var\(--app-preview-accent\); color: #ffffff;/);
 	});
 
+	test('startup page always renders with the dark preview background', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'installingDependencies',
+			title: 'Installing dependencies for feature/cart',
+			message: 'Installing dependencies before starting the preview server.',
+		}));
+
+		assert.match(html, /:root \{ color-scheme: dark;[^}]*--app-preview-background: #1e1e1e;/);
+		assert.doesNotMatch(html, /color-scheme: light dark/);
+		assert.doesNotMatch(html, /--app-preview-background: #ffffff/);
+		assert.doesNotMatch(html, /prefers-color-scheme/);
+	});
+
 	test('startup page hides agent context copy before the slow state', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
@@ -482,6 +495,20 @@ suite('Workbench App Preview', () => {
 
 		assert.match(html, /Copy context for agent/);
 		assert.match(html, /data-action="copy"/);
+	});
+
+	test('startup setup page renders configure action without retry or restart', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'setup',
+			title: getWorkbenchAppPreviewStartupTitle('setup', 'feature/cart'),
+			message: 'No preview URL is configured for this branch.',
+			actions: ['configure'],
+		}));
+
+		assert.match(html, /Configure URL/);
+		assert.match(html, /data-action="configure"/);
+		assert.doesNotMatch(html, /data-action="retry"/);
+		assert.doesNotMatch(html, /data-action="restart"/);
 	});
 
 	test('startup health timeout waits two and a half minutes before showing the slow state', () => {
@@ -547,6 +574,42 @@ suite('Workbench App Preview', () => {
 			errorUrl: 'https://local.preview.example.test:3001/',
 			errorCode: -3,
 			serverUrl: 'https://local.preview.example.test:3001/',
+		}), false);
+	});
+
+	test('preview load recovery waits instead of restarting while managed server process is alive', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: true,
+		}), false);
+	});
+
+	test('preview load recovery can restart after the managed server process exits', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: false,
+		}), true);
+	});
+
+	test('unresolved preview configuration shows setup before starting a server', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: undefined,
+			needsConfigurationPrompt: true,
+		}), true);
+	});
+
+	test('resolved preview configuration does not block server start', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: 'https://local.preview.example.test:3001/',
+			needsConfigurationPrompt: true,
 		}), false);
 	});
 

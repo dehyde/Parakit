@@ -116,6 +116,16 @@ export interface IWorkbenchAppPreviewLoadErrorRecoveryPolicy {
 	readonly activeManagedPreviewUrl?: string | undefined;
 }
 
+export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
+	readonly recoverableLoadError: boolean;
+	readonly serverProcessAlive: boolean;
+}
+
+export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
+	readonly configuredUrl: string | undefined;
+	readonly needsConfigurationPrompt: boolean;
+}
+
 export interface IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy {
 	readonly currentServerUrl: string | undefined;
 	readonly advertisedUrl: string;
@@ -420,6 +430,14 @@ export function shouldRecoverWorkbenchAppPreviewLoadError(policy: IWorkbenchAppP
 	}
 
 	return policy.errorCode === -7 || policy.errorCode === -102 || policy.errorCode === -105 || policy.errorCode === -106;
+}
+
+export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenchAppPreviewLoadErrorRestartPolicy): boolean {
+	return policy.recoverableLoadError && !policy.serverProcessAlive;
+}
+
+export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
+	return !policy.configuredUrl?.trim() && policy.needsConfigurationPrompt;
 }
 
 export function resolveWorkbenchAppPreviewAdvertisedUrl(policy: IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy): string | undefined {

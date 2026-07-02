@@ -43,7 +43,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -1139,6 +1139,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
 		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({ configuredUrl, needsConfigurationPrompt })) {
+			this._showPreviewSetupState(root, branchName);
+			return true;
+		}
 		if (configuredUrl && await this._shouldOpenConfiguredPreviewWithoutServer(root, branchName, configuredUrl)) {
 			return false;
 		}
@@ -1200,6 +1205,10 @@ export class WorkbenchAppPreviewController extends Disposable {
 			void this._copyPreviewStartupContext().catch(error => {
 				this._logService.error('[WorkbenchAppPreview] Failed to copy preview startup context.', error);
 			});
+		} else if (action === 'configure') {
+			void this._configurePreviewFromStartupPage().catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to configure preview URL from startup page.', error);
+			});
 		} else if (action === 'pasteRepoUrl') {
 			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.PasteRepoUrl).catch(error => {
 				this._logService.error('[WorkbenchAppPreview] Failed to start add repo URL flow.', error);
@@ -1209,6 +1218,10 @@ export class WorkbenchAppPreviewController extends Disposable {
 				this._logService.error('[WorkbenchAppPreview] Failed to start open local folder flow.', error);
 			});
 		}
+	}
+
+	private async _configurePreviewFromStartupPage(): Promise<void> {
+		await this._commandService.executeCommand(ConfigureWorkbenchAppPreviewUrlCommandId);
 	}
 
 	private async _showAddRepoFromStartupPage(choice: DesignerAddRepoChoice): Promise<void> {
@@ -1422,10 +1435,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 			return;
 		}
 
+		this._previewStartupInProgress = false;
 		this._needsConfigurationPrompt = true;
-		this._serverMessage = `No preview URL is configured for ${branchName ?? 'the current branch'}. Configure a branch preview URL or start the app from Claude Code.`;
+		this._serverMessage = `No preview URL is configured for ${branchName ?? 'the current branch'}. Configure a branch preview URL before starting App Preview.`;
 		this._showPreviewStartupPage(this._createPreviewStartupPageState('setup', root, branchName, this._lastWorkspaceContext, {
-			message: localize('appPreviewSetupMessage', "No preview URL is configured for this branch. Configure a branch preview URL or restart the preview server."),
+			message: localize('appPreviewSetupMessage', "No preview URL is configured for this branch. Configure a branch preview URL before starting App Preview."),
 			url: this._serverUrl,
 			healthUrl: this._serverHealthUrl,
 			command: this._serverCommand,
@@ -1858,11 +1872,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	async runPreviewServer(): Promise<IPreviewServerStatus> {
-		return this._startPreviewServer(false, await this._getCurrentBranchPort());
+		return this._startPreviewServer(false, await this._getCurrentBranchPort(), false, true);
 	}
 
 	async restartPreviewServer(): Promise<IPreviewServerStatus> {
-		return this._startPreviewServer(true, await this._getCurrentBranchPort());
+		return this._startPreviewServer(true, await this._getCurrentBranchPort(), false, true);
 	}
 
 	preflightDesignerWorkspaceContext(): IDesignerWorkspaceContextPreflight {
@@ -1911,6 +1925,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 			this._previewStartupInProgress = false;
 			const branchOpenedInSession = this._previewBranchesOpenedThisSession.has(this._getBranchSessionKey(root, branchName));
 			await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: !branchOpenedInSession });
+			await this._reconcileClaudeWorkspaceContext(context);
+			return this.getCommandStatus();
+		}
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({ configuredUrl, needsConfigurationPrompt })) {
+			this._showPreviewSetupState(root, branchName);
 			await this._reconcileClaudeWorkspaceContext(context);
 			return this.getCommandStatus();
 		}
@@ -2677,9 +2697,9 @@ export class WorkbenchAppPreviewController extends Disposable {
 		].filter((value): value is string => !!value);
 		const actions: IPreviewStartupPageState['actions'] = phase === 'slow'
 			? ['retry', 'restart', 'logs', 'copy']
-			: phase === 'failed' || phase === 'missingDependencies' || phase === 'setup'
-				? ['retry', 'restart', 'logs']
-				: [];
+			: phase === 'setup'
+				? ['configure']
+				: (phase === 'failed' || phase === 'missingDependencies') ? ['retry', 'restart', 'logs'] : [];
 
 		return {
 			phase,
@@ -2893,7 +2913,10 @@ export class WorkbenchAppPreviewController extends Disposable {
 				const branchName = await this._resolveWorkspaceBranchName(root);
 				this._lastHealthError = `${event.error.errorDescription} (${event.error.errorCode}) while loading ${event.error.url}`;
 				this._serverHealth = 'unhealthy';
-				if (event.error.errorCode === -7 && this._isManagedPreviewServerProcessAlive()) {
+				if (!shouldRestartWorkbenchAppPreviewAfterLoadError({
+					recoverableLoadError: true,
+					serverProcessAlive: this._isManagedPreviewServerProcessAlive(),
+				})) {
 					this._showPreviewStartupPage(this._createPreviewStartupPageState('slow', root, branchName, this._lastWorkspaceContext, {
 						message: localize('appPreviewLoadTimedOutWaiting', "Preview is taking longer than expected. Waiting for the app to respond."),
 						url: this._serverUrl ?? event.error.url,
