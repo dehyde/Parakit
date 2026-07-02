@@ -599,6 +599,18 @@ suite('Workbench App Preview', () => {
 		}), true);
 	});
 
+	test('preview load recovery can restart after managed startup has failed even if the terminal is still alive', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: true,
+			serverState: 'failed',
+		}), true);
+	});
+
 	test('unresolved preview configuration shows setup before starting a server', () => {
 		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
 			configuredUrl: undefined,

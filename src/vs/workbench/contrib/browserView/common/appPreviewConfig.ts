@@ -116,9 +116,12 @@ export interface IWorkbenchAppPreviewLoadErrorRecoveryPolicy {
 	readonly activeManagedPreviewUrl?: string | undefined;
 }
 
+export type WorkbenchAppPreviewServerState = 'stopped' | 'starting' | 'running' | 'failed';
+
 export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
 	readonly recoverableLoadError: boolean;
 	readonly serverProcessAlive: boolean;
+	readonly serverState?: WorkbenchAppPreviewServerState;
 }
 
 export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
@@ -433,7 +436,15 @@ export function shouldRecoverWorkbenchAppPreviewLoadError(policy: IWorkbenchAppP
 }
 
 export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenchAppPreviewLoadErrorRestartPolicy): boolean {
-	return policy.recoverableLoadError && !policy.serverProcessAlive;
+	if (!policy.recoverableLoadError) {
+		return false;
+	}
+
+	if (!policy.serverProcessAlive) {
+		return true;
+	}
+
+	return policy.serverState === 'failed' || policy.serverState === 'stopped';
 }
 
 export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
