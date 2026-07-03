@@ -3759,7 +3759,7 @@ export class CommandCenter {
 	}
 
 	private getDesignerCloneParentPath(): string {
-		return path.join(os.homedir(), 'Documents', 'Designer Repos');
+		return path.join(os.homedir(), 'repos');
 	}
 
 	private normalizeDesignerRepoPath(repoPath: string): string {

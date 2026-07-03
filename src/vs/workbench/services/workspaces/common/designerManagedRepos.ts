@@ -37,7 +37,7 @@ export interface DesignerState {
 }
 
 export function getDesignerReposRoot(userHome: URI): URI {
-	return joinPath(userHome, 'Documents', 'Designer Repos');
+	return joinPath(userHome, 'repos');
 }
 
 export function getDesignerManagedReposManifestResource(userHome: URI): URI {
