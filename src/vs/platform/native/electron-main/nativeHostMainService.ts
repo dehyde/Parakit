@@ -1148,6 +1148,39 @@ export class NativeHostMainService extends Disposable implements INativeHostMain
 		return findFreePort(startPort, giveUpAfter, timeout, stride);
 	}
 
+	async getPortOwner(windowId: number | undefined, port: number): Promise<{ pid: number; cwd?: string } | undefined> {
+		if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+			return undefined;
+		}
+		try {
+			if (process.platform === 'win32') {
+				const { stdout } = await promisify(exec)('netstat -ano -p TCP');
+				const line = stdout.split(/\r?\n/).find(entry => {
+					const parts = entry.trim().split(/\s+/);
+					return parts[1]?.endsWith(`:${port}`) && parts[3] === 'LISTENING';
+				});
+				const pid = line ? Number(line.trim().split(/\s+/).pop()) : undefined;
+				return pid && Number.isInteger(pid) ? { pid } : undefined;
+			}
+
+			const { stdout: pidOutput } = await promisify(exec)(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`);
+			const pid = Number(pidOutput.trim().split(/\s+/)[0]);
+			if (!Number.isInteger(pid) || pid <= 0) {
+				return undefined;
+			}
+
+			try {
+				const { stdout: cwdOutput } = await promisify(exec)(`lsof -a -p ${pid} -d cwd -Fn`);
+				const cwdLine = cwdOutput.split(/\r?\n/).find(entry => entry.startsWith('n'));
+				return { pid, cwd: cwdLine ? cwdLine.slice(1) : undefined };
+			} catch {
+				return { pid };
+			}
+		} catch {
+			return undefined;
+		}
+	}
+
 	//#endregion
 
 

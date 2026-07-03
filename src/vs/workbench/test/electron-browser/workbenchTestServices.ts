@@ -173,6 +173,7 @@ export class TestNativeHostService implements INativeHostService {
 	async loadCertificates(): Promise<string[]> { return []; }
 	async isPortFree() { return Promise.resolve(true); }
 	async findFreePort(startPort: number, giveUpAfter: number, timeout: number, stride?: number): Promise<number> { return -1; }
+	async getPortOwner(port: number): Promise<{ pid: number; cwd?: string } | undefined> { return undefined; }
 	async readClipboardText(type?: 'selection' | 'clipboard' | undefined): Promise<string> { return ''; }
 	async writeClipboardText(text: string, type?: 'selection' | 'clipboard' | undefined): Promise<void> { }
 	async readClipboardFindText(): Promise<string> { return ''; }

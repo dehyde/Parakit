@@ -912,6 +912,13 @@ export function isWorkbenchAppPreviewPortConflict(output: string, port: number |
 	return new RegExp(`(^|[^0-9])${port}([^0-9]|$)`).test(output);
 }
 
+export function isWorkbenchAppPreviewPathUnderRoot(candidatePath: string, rootPath: string): boolean {
+	const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+	const candidate = normalize(candidatePath);
+	const root = normalize(rootPath);
+	return candidate === root || candidate.startsWith(`${root}/`);
+}
+
 export function classifyWorkbenchAppPreviewTerminalFailure(output: string, port: number | undefined): WorkbenchAppPreviewTerminalFailure {
 	if (isWorkbenchAppPreviewPortConflict(output, port)) {
 		return 'portConflict';
