@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
 import { getSerializableBrowserEditorInputData } from '../../common/browserEditorInput.js';
 
@@ -1024,5 +1024,150 @@ suite('Workbench App Preview', () => {
 			backgroundRestartAttempts: 0,
 			maxBackgroundRestartAttempts: 3,
 		}), true);
+	});
+
+	test('load events are ignored while still loading', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: true,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load events with no error are ignored', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: false,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while the loud startup sequence is in progress', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: true,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while a previous recovery attempt is still in flight', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: true,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while a quiet (background) server start is in flight', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: true,
+		}), true);
+	});
+
+	test('a genuine, isolated load error is not ignored', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), false);
+	});
+
+	test('discovered port reconciliation updates url, health url, and port when the server bound elsewhere', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), {
+			port: 3002,
+			url: 'http://127.0.0.1:3002/',
+			healthUrl: 'http://127.0.0.1:3002/health',
+		});
+	});
+
+	test('discovered port reconciliation treats localhost and 127.0.0.1 as the same host', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3000/',
+			serverHealthUrl: 'http://127.0.0.1:3000/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://localhost:3001/',
+			discoveredBranchName: 'feature/foo',
+		}), {
+			port: 3001,
+			url: 'http://127.0.0.1:3001/',
+			healthUrl: 'http://127.0.0.1:3001/health',
+		});
+	});
+
+	test('discovered port reconciliation does nothing when the port already matches', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3001/some/deep/path',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the discovery is for a different branch', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/bar',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the repo has a fixed port configured', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: 3001,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the discovered host differs', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://example.test:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when there is no current server url yet', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: undefined,
+			serverHealthUrl: undefined,
+			serverBranch: undefined,
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: undefined,
+		}), undefined);
 	});
 });

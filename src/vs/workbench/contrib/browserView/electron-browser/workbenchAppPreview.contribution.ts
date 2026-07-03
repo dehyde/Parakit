@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -1279,15 +1279,55 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 	}
 
-	async navigateDiscoveredUrl(url: string): Promise<void> {
+	async navigateDiscoveredUrl(url: string, options?: { trustedSource?: boolean }): Promise<void> {
 		const normalizedUrl = normalizeWorkbenchAppPreviewLoopbackUrl(url);
 		this._discoveredUrl = normalizedUrl;
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		this._discoveredUrlBranchName = root ? await this._resolveWorkspaceBranchName(root) : undefined;
+		// Only reconcile tracked server state from a source we know is the managed dev-server
+		// terminal (see the trustedSource: true call site below). Untrusted callers (any other
+		// terminal at the workspace cwd, or agent log scanning) can still navigate opportunistically,
+		// but must not be able to overwrite/persist server state from an unrelated command's output.
+		if (root && options?.trustedSource) {
+			await this._reconcileDiscoveredServerPort(root, normalizedUrl, this._discoveredUrlBranchName);
+		}
 		if (this._previewStartupInProgress) {
 			return;
 		}
 		await this._navigatePreferredUrl();
+	}
+
+	/**
+	 * Dev servers frequently bind to a different port than requested (e.g. "3001 is in use,
+	 * using 3002 instead") without emitting a recognizable port-conflict error. When the
+	 * server's own terminal output reveals it is actually listening somewhere other than
+	 * where we assumed, trust the terminal: update the tracked URL/health URL/port so
+	 * status reporting, health checks, and navigation all target the real server instead
+	 * of silently polling a stale or unrelated process on the originally requested port.
+	 */
+	private async _reconcileDiscoveredServerPort(root: URI, discoveredUrl: string, discoveredBranchName: string | undefined): Promise<void> {
+		const reconciliation = resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: this._serverUrl,
+			serverHealthUrl: this._serverHealthUrl,
+			serverBranch: this._serverBranch,
+			serverFixedPort: this._serverFixedPort,
+			discoveredUrl,
+			discoveredBranchName,
+		});
+		if (!reconciliation) {
+			return;
+		}
+
+		this._logService.info(`[WorkbenchAppPreview] Preview server for ${this._serverBranch ?? '<detached>'} is actually listening on port ${reconciliation.port} (expected ${this._serverPort}); updating tracked URL to ${reconciliation.url}.`);
+		this._serverPort = reconciliation.port;
+		this._serverUrl = reconciliation.url;
+		this._serverHealthUrl = reconciliation.healthUrl;
+		const branchName = await this._resolveWorkspaceBranchName(root);
+		storeBranchRuntime(this._storageService, root, branchName, {
+			...getBranchRuntime(this._storageService, root, branchName),
+			port: reconciliation.port,
+			lastUrl: reconciliation.url,
+		});
 	}
 
 	refreshFromOverride(): void {
@@ -1915,7 +1955,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 				return;
 			}
 
-			await this.navigateDiscoveredUrl(normalizedUrl);
+			await this.navigateDiscoveredUrl(normalizedUrl, { trustedSource: true });
 		}
 
 	private _resolveHealthUrl(url: string, healthPath: string | undefined): string {
@@ -2012,11 +2052,48 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	async runPreviewServer(): Promise<IPreviewServerStatus> {
+		if (await this._showPreviewSetupInsteadOfStarting()) {
+			return this.getPreviewStatus();
+		}
 		return this._startPreviewServer(false, await this._getCurrentBranchPort(), false, true);
 	}
 
 	async restartPreviewServer(): Promise<IPreviewServerStatus> {
+		if (await this._showPreviewSetupInsteadOfStarting()) {
+			return this.getPreviewStatus();
+		}
 		return this._startPreviewServer(true, await this._getCurrentBranchPort(), false, true);
+	}
+
+	/**
+	 * Mirrors the setup-before-start gate already applied to the automatic startup paths
+	 * (initial auto-start and branch-switch reconciliation), so explicitly triggered
+	 * Run/Restart Preview Server commands and their LM tool equivalents also show the
+	 * "this branch needs configuration" screen instead of attempting a doomed normal start.
+	 */
+	private async _showPreviewSetupInsteadOfStarting(): Promise<boolean> {
+		const root = getWorkspaceRoot(this._workspaceContextService);
+		if (!root) {
+			return false;
+		}
+		const branchName = await this._resolveWorkspaceBranchName(root);
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			inferredStartupUrl,
+			needsConfigurationPrompt,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
+			this._showPreviewSetupState(root, branchName);
+			return true;
+		}
+		return false;
 	}
 
 	preflightDesignerWorkspaceContext(): IDesignerWorkspaceContextPreflight {
@@ -2592,9 +2669,10 @@ export class WorkbenchAppPreviewController extends Disposable {
 				command: installCommand ?? serverCommand,
 				cwd
 			}));
-		} else {
-			await this.navigateDiscoveredUrl(resolvedServer.url);
 		}
+		// Do not navigate to resolvedServer.url here: _stopPreviewServer() above always tears down
+		// any existing terminal, so nothing is listening at this URL yet. Navigation happens once the
+		// server is actually confirmed (health check below, or the server's own terminal output).
 		this._needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
 
 		try {
@@ -3092,7 +3170,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	private async _handlePreviewLoadingState(event: IBrowserViewLoadingEvent): Promise<void> {
-		if (event.loading || !event.error || this._previewStartupInProgress || this._previewLoadFailureRecoveryInFlight) {
+		if (shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: event.loading,
+			hasError: !!event.error,
+			previewStartupInProgress: this._previewStartupInProgress,
+			previewLoadFailureRecoveryInFlight: this._previewLoadFailureRecoveryInFlight,
+			serverStartInFlight: !!this._serverStartInFlight,
+		}) || !event.error) {
 			return;
 		}
 
@@ -3232,6 +3316,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 				this._consecutiveHealthFailures = 0;
 				this._backgroundRestartAttempts = 0;
 				await this._clearPreviewHealthOverlay();
+				// The restarted server may be serving a stale/errored page from before the crash
+				// (a health overlay only draws on top of the existing page, it doesn't reload it),
+				// and may have landed on a different port (see _reconcileDiscoveredServerPort).
+				// Force a re-navigate to the real, current URL now that it's confirmed healthy.
+				await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
 				return;
 			}
 

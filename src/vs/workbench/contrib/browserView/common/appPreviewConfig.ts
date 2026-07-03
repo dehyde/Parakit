@@ -127,6 +127,14 @@ export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
 	readonly serverState?: WorkbenchAppPreviewServerState;
 }
 
+export interface IWorkbenchAppPreviewLoadEventGatePolicy {
+	readonly eventLoading: boolean;
+	readonly hasError: boolean;
+	readonly previewStartupInProgress: boolean;
+	readonly previewLoadFailureRecoveryInFlight: boolean;
+	readonly serverStartInFlight: boolean;
+}
+
 export interface IWorkbenchAppPreviewServerCommandExitPolicy {
 	readonly serverState: WorkbenchAppPreviewServerState;
 	readonly serverHealth: WorkbenchAppPreviewHealthState;
@@ -470,6 +478,14 @@ export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenc
 	return policy.serverState === 'failed' || policy.serverState === 'stopped';
 }
 
+export function shouldIgnoreWorkbenchAppPreviewLoadEvent(policy: IWorkbenchAppPreviewLoadEventGatePolicy): boolean {
+	return policy.eventLoading
+		|| !policy.hasError
+		|| policy.previewStartupInProgress
+		|| policy.previewLoadFailureRecoveryInFlight
+		|| policy.serverStartInFlight;
+}
+
 export function getWorkbenchAppPreviewServerStateAfterCommandExit(policy: IWorkbenchAppPreviewServerCommandExitPolicy): WorkbenchAppPreviewServerState | undefined {
 	if (policy.serverState !== 'starting' && policy.serverState !== 'running') {
 		return undefined;
@@ -762,6 +778,65 @@ export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port:
 
 	parsed.port = String(port);
 	return parsed.href;
+}
+
+export interface IWorkbenchAppPreviewDiscoveredPortReconciliationPolicy {
+	readonly serverUrl: string | undefined;
+	readonly serverHealthUrl: string | undefined;
+	readonly serverBranch: string | undefined;
+	readonly serverFixedPort: number | undefined;
+	readonly discoveredUrl: string;
+	readonly discoveredBranchName: string | undefined;
+}
+
+export interface IWorkbenchAppPreviewDiscoveredPortReconciliation {
+	readonly port: number;
+	readonly url: string;
+	readonly healthUrl: string | undefined;
+}
+
+function getWorkbenchAppPreviewUrlPort(url: URL): number {
+	return Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+}
+
+/**
+ * Many dev servers silently bind to a different port than the one they were asked for
+ * (e.g. "port 3001 is in use, using 3002 instead") without failing or printing a
+ * recognizable port-conflict error. When a discovered URL from the server's own terminal
+ * output disagrees with the port we assumed, trust the terminal over our assumption so
+ * navigation, health checks, and status reporting all point at the server that is actually
+ * running - regardless of which project/tool produced it.
+ */
+export function resolveWorkbenchAppPreviewDiscoveredPortReconciliation(policy: IWorkbenchAppPreviewDiscoveredPortReconciliationPolicy): IWorkbenchAppPreviewDiscoveredPortReconciliation | undefined {
+	if (!policy.serverUrl || policy.serverFixedPort || policy.serverBranch !== policy.discoveredBranchName) {
+		return undefined;
+	}
+
+	let discovered: URL;
+	let expected: URL;
+	try {
+		discovered = new URL(policy.discoveredUrl);
+		expected = new URL(policy.serverUrl);
+	} catch {
+		return undefined;
+	}
+
+	const sameHost = discovered.hostname === expected.hostname
+		|| (isWorkbenchAppPreviewLoopbackHost(discovered.hostname) && isWorkbenchAppPreviewLoopbackHost(expected.hostname));
+	if (!sameHost) {
+		return undefined;
+	}
+
+	const discoveredPort = getWorkbenchAppPreviewUrlPort(discovered);
+	if (!discoveredPort || discoveredPort === getWorkbenchAppPreviewUrlPort(expected)) {
+		return undefined;
+	}
+
+	return {
+		port: discoveredPort,
+		url: adaptWorkbenchAppPreviewUrlToPort(policy.serverUrl, discoveredPort) ?? policy.serverUrl,
+		healthUrl: adaptWorkbenchAppPreviewUrlToPort(policy.serverHealthUrl, discoveredPort) ?? policy.serverHealthUrl,
+	};
 }
 
 export function isWorkbenchAppPreviewPortConflict(output: string, port: number | undefined): boolean {
