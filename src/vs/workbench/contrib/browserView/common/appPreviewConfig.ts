@@ -117,6 +117,7 @@ export interface IWorkbenchAppPreviewLoadErrorRecoveryPolicy {
 }
 
 export type WorkbenchAppPreviewServerState = 'stopped' | 'starting' | 'running' | 'failed';
+export type WorkbenchAppPreviewHealthState = 'unknown' | 'healthy' | 'unhealthy';
 
 export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
 	readonly recoverableLoadError: boolean;
@@ -124,9 +125,22 @@ export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
 	readonly serverState?: WorkbenchAppPreviewServerState;
 }
 
+export interface IWorkbenchAppPreviewServerCommandExitPolicy {
+	readonly serverState: WorkbenchAppPreviewServerState;
+	readonly serverHealth: WorkbenchAppPreviewHealthState;
+}
+
+export interface IWorkbenchAppPreviewHealthTimeoutPolicy {
+	readonly serverState: WorkbenchAppPreviewServerState;
+	readonly serverHealth: WorkbenchAppPreviewHealthState;
+	readonly serverTerminalExited: boolean;
+	readonly serverCommandActive?: boolean;
+}
+
 export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
 	readonly configuredUrl: string | undefined;
 	readonly needsConfigurationPrompt: boolean;
+	readonly canStartServerWithoutInstall?: boolean;
 }
 
 export interface IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy {
@@ -447,8 +461,36 @@ export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenc
 	return policy.serverState === 'failed' || policy.serverState === 'stopped';
 }
 
+export function getWorkbenchAppPreviewServerStateAfterCommandExit(policy: IWorkbenchAppPreviewServerCommandExitPolicy): WorkbenchAppPreviewServerState | undefined {
+	if (policy.serverState !== 'starting' && policy.serverState !== 'running') {
+		return undefined;
+	}
+
+	return policy.serverHealth === 'healthy' ? 'stopped' : 'failed';
+}
+
+export function getWorkbenchAppPreviewServerStateAfterHealthTimeout(policy: IWorkbenchAppPreviewHealthTimeoutPolicy): WorkbenchAppPreviewServerState | undefined {
+	if (policy.serverState !== 'starting' && policy.serverState !== 'running') {
+		return undefined;
+	}
+
+	if (policy.serverHealth === 'healthy') {
+		return undefined;
+	}
+
+	if (policy.serverTerminalExited || policy.serverCommandActive === false) {
+		return 'failed';
+	}
+
+	return undefined;
+}
+
 export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
-	return !policy.configuredUrl?.trim() && policy.needsConfigurationPrompt;
+	return !policy.configuredUrl?.trim() && policy.needsConfigurationPrompt && !policy.canStartServerWithoutInstall;
+}
+
+export function canStartWorkbenchAppPreviewServerWithoutInstall(config: IResolvedWorkbenchAppPreviewDevConfig | undefined): boolean {
+	return !!config && !config.installCommand && !config.corepackInstallCommand;
 }
 
 export function resolveWorkbenchAppPreviewAdvertisedUrl(policy: IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy): string | undefined {
@@ -609,10 +651,12 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 		: undefined;
 	const corepackInstallCommand = installCommand ? packageManager?.corepackInstallCommand?.trim() : undefined;
 	for (const scriptName of ['dev', 'start', 'serve']) {
-		if (typeof scripts[scriptName] === 'string') {
+		const script = scripts[scriptName];
+		if (typeof script === 'string') {
+			const scriptArgs = getWorkbenchAppPreviewDevServerScriptArgs(script);
 			return {
-				command: `${scriptCommandPrefix} ${scriptName}`,
-				...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}` } : {}),
+				command: `${scriptCommandPrefix} ${scriptName}${scriptArgs}`,
+				...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}${scriptArgs}` } : {}),
 				portEnv: DEFAULT_DEV_PORT_ENV,
 				url: resolvedUrl,
 				healthPath: '/',
@@ -625,6 +669,19 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	}
 
 	return undefined;
+}
+
+function getWorkbenchAppPreviewDevServerScriptArgs(script: string): string {
+	const normalized = script.trim().toLowerCase();
+	if (!/\brsbuild(?:\s|$)/.test(normalized)) {
+		return '';
+	}
+
+	if (/(^|\s)(--port(?:=|\s)|-p(?:=|\s))/.test(normalized)) {
+		return '';
+	}
+
+	return ' -- --port ${PORT}';
 }
 
 export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string): IResolvedWorkbenchAppPreviewDevConfig {

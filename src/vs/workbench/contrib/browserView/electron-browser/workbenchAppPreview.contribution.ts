@@ -32,6 +32,7 @@ import { INativeHostService } from '../../../../platform/native/common/native.js
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
 import { ICommandDetectionCapability, ITerminalCommand, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
+import { PromptInputState } from '../../../../platform/terminal/common/capabilities/commandDetection/promptInputModel.js';
 import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
 import { generateUuid } from '../../../../base/common/uuid.js';
@@ -43,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -74,6 +75,8 @@ const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
 const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
 const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
 const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
+const PREVIEW_TERMINAL_READY_TIMEOUT = 10_000;
+const PREVIEW_TERMINAL_READY_ATTEMPTS = 2;
 
 export const ConfigureWorkbenchAppPreviewUrlCommandId = 'workbench.action.agentSessions.configureAppPreviewUrl';
 export const ClearWorkbenchAppPreviewOverrideCommandId = 'workbench.action.appPreview.clearOverride';
@@ -124,7 +127,7 @@ interface IAppPreviewBranchRuntimeStore {
 }
 
 type PreviewServerState = WorkbenchAppPreviewServerState;
-type PreviewHealthState = 'unknown' | 'healthy' | 'unhealthy';
+type PreviewHealthState = WorkbenchAppPreviewHealthState;
 
 interface IPreviewServerStatus {
 	state: PreviewServerState;
@@ -1140,7 +1143,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 		const branchName = await this._resolveWorkspaceBranchName(root);
 		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
 		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
-		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({ configuredUrl, needsConfigurationPrompt })) {
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			needsConfigurationPrompt,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
 			this._showPreviewSetupState(root, branchName);
 			return true;
 		}
@@ -1691,6 +1699,100 @@ export class WorkbenchAppPreviewController extends Disposable {
 		return this._runPreviewTerminalCommandWithSentinel(terminal, command, timeoutMs);
 	}
 
+	private async _waitForPreviewServerTerminalReady(terminal: ITerminalInstance): Promise<boolean> {
+		for (let attempt = 0; attempt < PREVIEW_TERMINAL_READY_ATTEMPTS; attempt++) {
+			const result = await this._runPreviewTerminalCommandWithSentinel(terminal, ':', PREVIEW_TERMINAL_READY_TIMEOUT);
+			if (!result.timedOut && result.exitCode === 0) {
+				this._serverRecentOutput = '';
+				this._serverLastOutputAt = undefined;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private async _runPreviewServerTerminalCommand(terminal: ITerminalInstance, command: string, root: URI, branchName: string | undefined, context: IDesignerWorkspaceContext | undefined): Promise<void> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		if (!commandDetection) {
+			await terminal.sendText(command, true, true);
+			return;
+		}
+
+		const commandId = `app-preview-server-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const store = new DisposableStore();
+		let finished = false;
+		const finish = (result: IPreviewTerminalCommandResult) => {
+			if (finished) {
+				return;
+			}
+
+			finished = true;
+			store.dispose();
+			void this._handlePreviewServerCommandExit(terminal, result, root, branchName, context).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to handle preview server command exit.', error);
+			});
+		};
+		const finishCommand = (terminalCommand: ITerminalCommand) => {
+			if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+				return;
+			}
+
+			finish({
+				exitCode: terminalCommand.exitCode,
+				output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+			});
+		};
+
+		store.add(commandDetection.onCommandFinished(finishCommand));
+		store.add(commandDetection.onCommandInvalidated(commands => {
+			for (const terminalCommand of commands) {
+				finishCommand(terminalCommand);
+			}
+		}));
+		this._serverTerminalExitStore.add(store);
+		void terminal.runCommand(command, true, commandId, true).catch(error => {
+			finish({
+				exitCode: 1,
+				output: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}
+
+	private async _handlePreviewServerCommandExit(terminal: ITerminalInstance, result: IPreviewTerminalCommandResult, root: URI, branchName: string | undefined, context: IDesignerWorkspaceContext | undefined): Promise<void> {
+		if (terminal !== this._serverTerminal || this._serverTerminalExited) {
+			return;
+		}
+
+		const nextState = getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: this._serverState,
+			serverHealth: this._serverHealth,
+		});
+		if (!nextState) {
+			return;
+		}
+
+		this._serverState = nextState;
+		this._serverHealth = 'unhealthy';
+		this._serverMessage = this._formatPreviewTerminalFailureMessage(
+			result.output ?? this._serverRecentOutput,
+			nextState === 'failed'
+				? localize('appPreviewServerCommandExitedBeforeReadyMessage', "Preview server command exited before the app became available.")
+				: localize('appPreviewServerCommandStoppedMessage', "Preview server command exited.")
+		);
+
+		if (nextState === 'failed') {
+			this._previewStartupInProgress = false;
+			this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+				message: this._serverMessage,
+				url: this._serverUrl,
+				healthUrl: this._serverHealthUrl,
+				command: this._serverCommand,
+				cwd: this._serverCwd
+			}));
+		}
+	}
+
 	private async _isCorepackAvailable(terminal: ITerminalInstance): Promise<boolean> {
 		const result = await this._runPreviewTerminalCommand(terminal, 'corepack --version', PREVIEW_COREPACK_PROBE_TIMEOUT, false);
 		return result.exitCode === 0;
@@ -1929,7 +2031,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 			return this.getCommandStatus();
 		}
 		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
-		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({ configuredUrl, needsConfigurationPrompt })) {
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			needsConfigurationPrompt,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
 			this._showPreviewSetupState(root, branchName);
 			await this._reconcileClaudeWorkspaceContext(context);
 			return this.getCommandStatus();
@@ -2467,6 +2574,24 @@ export class WorkbenchAppPreviewController extends Disposable {
 			this._serverTerminalExitStore.add(terminal.onExit(() => {
 				this._serverTerminalExited = true;
 			}));
+			const terminalReady = await this._waitForPreviewServerTerminalReady(terminal);
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (!terminalReady) {
+				this._serverState = 'failed';
+				this._serverHealth = 'unknown';
+				this._serverMessage = this._formatPreviewTerminalFailureMessage(this._serverRecentOutput, localize('appPreviewTerminalNotReadyMessage', "Preview terminal did not become ready before the server could start."));
+				this._previewStartupInProgress = false;
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+					message: this._serverMessage,
+					url: resolvedServer.url,
+					healthUrl: resolvedServer.healthUrl,
+					command: serverCommand,
+					cwd
+				}));
+				return this.getPreviewStatus();
+			}
 			const corepackAvailable = resolvedConfig.corepackCommand || resolvedConfig.corepackInstallCommand
 				? await this._isCorepackAvailable(terminal)
 				: false;
@@ -2520,14 +2645,19 @@ export class WorkbenchAppPreviewController extends Disposable {
 					cwd
 				}));
 			}
-			await this._serverTerminal.sendText(serverCommand, true, true);
+			await this._runPreviewServerTerminalCommand(terminal, serverCommand, root, branchName, context);
 			if (!isCurrentStart()) {
 				return this.getPreviewStatus();
 			}
-			this._serverState = 'running';
-			this._serverMessage = this._needsConfigurationPrompt
-				? `Opened ${resolvedServer.url}. Ask the user whether to save this as the branch preview URL.`
-				: `Opened ${resolvedServer.url}.`;
+			if (this._serverState === 'starting') {
+				this._serverState = 'running';
+				this._serverMessage = this._needsConfigurationPrompt
+					? `Opened ${resolvedServer.url}. Ask the user whether to save this as the branch preview URL.`
+					: `Opened ${resolvedServer.url}.`;
+			}
+			if (this._serverState !== 'running') {
+				return this.getPreviewStatus();
+			}
 			if (waitForHealthy) {
 				this._showPreviewStartupPage(this._createPreviewStartupPageState('healthChecking', root, branchName, context, {
 					message: localize('appPreviewHealthCheckingMessage', "The server is starting. Waiting for the preview health check to pass."),
@@ -2551,10 +2681,20 @@ export class WorkbenchAppPreviewController extends Disposable {
 					this._previewStartupInProgress = false;
 					this._startHealthPolling();
 					await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
-				} else if (this._serverTerminalExited) {
+				} else if (getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+					serverState: this._serverState,
+					serverHealth: this._serverHealth,
+					serverTerminalExited: this._serverTerminalExited,
+					serverCommandActive: this._isPreviewServerCommandActive(),
+				}) === 'failed') {
 					this._serverHealth = 'unhealthy';
 					this._serverState = 'failed';
-					this._serverMessage = this._formatPreviewTerminalFailureMessage(this._serverRecentOutput, localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly."));
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(
+						this._serverRecentOutput,
+						this._serverTerminalExited
+							? localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly.")
+							: localize('appPreviewServerCommandInactiveMessage', "Preview server command exited before the app became available.")
+					);
 					this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
 						message: this._serverMessage,
 						url: this._serverUrl,
@@ -2754,6 +2894,19 @@ export class WorkbenchAppPreviewController extends Disposable {
 			await new Promise(resolve => mainWindow.setTimeout(resolve, PREVIEW_STARTUP_HEALTH_INTERVAL));
 		}
 		return false;
+	}
+
+	private _isPreviewServerCommandActive(): boolean | undefined {
+		const commandDetection = this._serverTerminal?.capabilities.get(TerminalCapability.CommandDetection);
+		if (!commandDetection) {
+			return undefined;
+		}
+
+		if (commandDetection.executingCommandObject || commandDetection.executingCommand) {
+			return true;
+		}
+
+		return commandDetection.promptInputModel.state === PromptInputState.Input ? false : undefined;
 	}
 
 	private _stopPreviewServer(): void {

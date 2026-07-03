@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
 
 function decodeDataUrlHtml(dataUrl: string): string {
@@ -611,11 +611,63 @@ suite('Workbench App Preview', () => {
 		}), true);
 	});
 
+	test('preview server command exit before health marks startup failed', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+		}), 'failed');
+	});
+
+	test('preview server command exit after health marks server stopped', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: 'running',
+			serverHealth: 'healthy',
+		}), 'stopped');
+	});
+
+	test('preview startup health timeout fails when command is no longer active', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+			serverTerminalExited: false,
+			serverCommandActive: false,
+		}), 'failed');
+	});
+
+	test('preview startup health timeout can keep waiting when command activity is unknown', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+			serverTerminalExited: false,
+			serverCommandActive: undefined,
+		}), undefined);
+	});
+
 	test('unresolved preview configuration shows setup before starting a server', () => {
 		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
 			configuredUrl: undefined,
 			needsConfigurationPrompt: true,
 		}), true);
+	});
+
+	test('unresolved preview configuration allows server start when dependencies are ready', () => {
+		const policy = {
+			configuredUrl: undefined,
+			needsConfigurationPrompt: true,
+			canStartServerWithoutInstall: true,
+		};
+
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy), false);
+	});
+
+	test('unresolved preview configuration shows setup before installing dependencies', () => {
+		const policy = {
+			configuredUrl: undefined,
+			needsConfigurationPrompt: true,
+			canStartServerWithoutInstall: false,
+		};
+
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy), true);
 	});
 
 	test('resolved preview configuration does not block server start', () => {
@@ -759,9 +811,20 @@ suite('Workbench App Preview', () => {
 		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
 			start: 'RSBUILD_ENV=dev rsbuild dev',
 		}, 'https://local.preview.example.test:${PORT}/app/projects/abc'), {
-			command: 'npm run start',
+			command: 'npm run start -- --port ${PORT}',
 			portEnv: 'PORT',
 			url: 'https://local.preview.example.test:${PORT}/app/projects/abc',
+			healthPath: '/',
+		});
+	});
+
+	test('heuristic dev config passes assigned port to rsbuild scripts', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'rsbuild dev',
+		}), {
+			command: 'npm run start -- --port ${PORT}',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
 			healthPath: '/',
 		});
 	});
@@ -779,7 +842,7 @@ suite('Workbench App Preview', () => {
 		}, undefined, env);
 
 		assert.deepStrictEqual(config, {
-			command: 'npm run start',
+			command: 'npm run start -- --port ${PORT}',
 			portEnv: 'PORT',
 			url: 'https://local.preview.example.test:3001/',
 			healthPath: '/',
@@ -795,6 +858,21 @@ suite('Workbench App Preview', () => {
 			url: 'http://127.0.0.1:${PORT}/',
 			healthPath: '/',
 		});
+	});
+
+	test('preview server config can start without install when it has no install commands', () => {
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall(resolveWorkbenchAppPreviewStaticHtmlConfig('public')), true);
+	});
+
+	test('preview server config cannot start without install when dependencies need setup', () => {
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall({
+			command: 'npm run dev',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			installCommand: 'npm install',
+		}), false);
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall(undefined), false);
 	});
 
 	test('normalizes wildcard bind hosts to loopback preview URLs', () => {
