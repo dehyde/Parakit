@@ -420,8 +420,11 @@ export class BrowserViewMainService extends Disposable implements IBrowserViewMa
 				}
 
 				const info = this._getViewInfo(child);
+				const state = openOptions.isSessionAppPreviewAuth
+					? { ...info.state, isSessionAppPreviewAuth: true }
+					: info.state;
 				this._onDidCreateBrowserView.fire({
-					info: url ? { ...info, state: { ...info.state, url } } : info,
+					info: { ...info, state: url ? { ...state, url } : state },
 					openOptions
 				});
 

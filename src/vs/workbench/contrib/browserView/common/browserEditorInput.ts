@@ -48,6 +48,26 @@ export interface IBrowserEditorInputData extends IBrowserEditorViewState {
 	readonly id: string;
 }
 
+export function getSerializableBrowserEditorInputData(data: IBrowserEditorInputData): IBrowserEditorInputData | undefined {
+	if (data.isSessionAppPreviewAuth) {
+		return undefined;
+	}
+
+	if (data.isSessionAppPreview) {
+		return {
+			id: data.id,
+			isSessionAppPreview: true,
+		};
+	}
+
+	return {
+		id: data.id,
+		url: data.url,
+		title: data.title,
+		favicon: data.favicon,
+	};
+}
+
 /**
  * Fired before a {@link BrowserEditorInput} is disposed. Listeners may call
  * {@link veto} to prevent disposal and keep the input and its model alive.
@@ -162,6 +182,10 @@ export class BrowserEditorInput extends EditorInput {
 		return !!this._initialData.isSessionAppPreview;
 	}
 
+	get isSessionAppPreviewAuth(): boolean {
+		return !!this._initialData.isSessionAppPreviewAuth;
+	}
+
 	get isSharingAvailable(): boolean {
 		return this._model ? this._model.sharingState !== BrowserViewSharingState.Unavailable : this.browserViewWorkbenchService.isSharingAvailable;
 	}
@@ -175,7 +199,8 @@ export class BrowserEditorInput extends EditorInput {
 			this._initialData = {
 				id: this._id,
 				url: destination,
-				isSessionAppPreview: this._initialData.isSessionAppPreview
+				isSessionAppPreview: this._initialData.isSessionAppPreview,
+				isSessionAppPreviewAuth: this._initialData.isSessionAppPreviewAuth
 			};
 			this._onDidChangeLabel.fire();
 		}
@@ -343,7 +368,8 @@ export class BrowserEditorInput extends EditorInput {
 			url: this.url,
 			title: this.title,
 			favicon: this.favicon,
-			isSessionAppPreview: this.isSessionAppPreview
+			isSessionAppPreview: this.isSessionAppPreview,
+			isSessionAppPreviewAuth: this.isSessionAppPreviewAuth
 		};
 		return {
 			resource: this.resource,
@@ -371,7 +397,8 @@ export class BrowserEditorInput extends EditorInput {
 				url: this._model.url,
 				title: this._model.title,
 				favicon: this._model.favicon,
-				isSessionAppPreview: this.isSessionAppPreview
+				isSessionAppPreview: this.isSessionAppPreview,
+				isSessionAppPreviewAuth: this.isSessionAppPreviewAuth
 			};
 			this._model.dispose();
 			this._model = undefined;
@@ -384,7 +411,8 @@ export class BrowserEditorInput extends EditorInput {
 			url: this.url,
 			title: this.title,
 			favicon: this.favicon,
-			isSessionAppPreview: this.isSessionAppPreview
+			isSessionAppPreview: this.isSessionAppPreview,
+			isSessionAppPreviewAuth: this.isSessionAppPreviewAuth
 		};
 	}
 }
@@ -399,12 +427,16 @@ export class BrowserEditorSerializer implements IEditorSerializer {
 			return undefined;
 		}
 
-		return JSON.stringify(editorInput.serialize());
+		const data = getSerializableBrowserEditorInputData(editorInput.serialize());
+		return data ? JSON.stringify(data) : undefined;
 	}
 
 	deserialize(instantiationService: IInstantiationService, serializedEditor: string): EditorInput | undefined {
 		try {
 			const data: IBrowserEditorInputData = JSON.parse(serializedEditor);
+			if (data.isSessionAppPreviewAuth) {
+				return undefined;
+			}
 			return instantiationService.invokeFunction((accessor) => {
 				const browserViewWorkbenchService = accessor.get(IBrowserViewWorkbenchService);
 				return browserViewWorkbenchService.getOrCreateLazy(data.id, data);

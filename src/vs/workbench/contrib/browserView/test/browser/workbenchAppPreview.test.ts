@@ -5,8 +5,9 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
+import { getSerializableBrowserEditorInputData } from '../../common/browserEditorInput.js';
 
 function decodeDataUrlHtml(dataUrl: string): string {
 	const marker = 'data:text/html;base64,';
@@ -511,6 +512,47 @@ suite('Workbench App Preview', () => {
 		assert.doesNotMatch(html, /data-action="restart"/);
 	});
 
+	test('startup setup page renders as a static configuration prompt', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'setup',
+			title: getWorkbenchAppPreviewStartupTitle('setup', 'feature/cart'),
+			message: 'No preview URL is configured for this branch.',
+			stages: [{ label: 'Configure preview', status: 'current', startedAt: 12345 }],
+			actions: ['configure'],
+		}, APP_PREVIEW_STARTUP_ANIMATION_SRC));
+
+		assert.doesNotMatch(html, /startup-animation/);
+		assert.doesNotMatch(html, /stage-spinner/);
+		assert.doesNotMatch(html, /stage-elapsed/);
+		assert.doesNotMatch(html, /app-preview-stage-spinner/);
+		assert.doesNotMatch(html, /setInterval\(updateTimers, 1000\)/);
+		assert.doesNotMatch(html, /<ol class="stages">/);
+		assert.match(html, /<div class="icon">\?<\/div>/);
+		assert.match(html, /Configure URL/);
+	});
+
+	test('transient App Preview auth tabs are not serialized', () => {
+		assert.strictEqual(getSerializableBrowserEditorInputData({
+			id: 'auth-tab',
+			url: 'https://login.example.com/oauth',
+			title: 'Sign in',
+			isSessionAppPreviewAuth: true,
+		}), undefined);
+	});
+
+	test('serialized App Preview tabs do not restore runtime URLs', () => {
+		assert.deepStrictEqual(getSerializableBrowserEditorInputData({
+			id: 'app-preview',
+			url: 'https://local.preview.example.test:3001/app/projects/123',
+			title: 'Project details',
+			favicon: 'data:image/svg+xml;base64,abc',
+			isSessionAppPreview: true,
+		}), {
+			id: 'app-preview',
+			isSessionAppPreview: true,
+		});
+	});
+
 	test('startup health timeout waits two and a half minutes before showing the slow state', () => {
 		assert.strictEqual(WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT, 150_000);
 	});
@@ -663,6 +705,7 @@ suite('Workbench App Preview', () => {
 	test('unresolved preview configuration shows setup before installing dependencies', () => {
 		const policy = {
 			configuredUrl: undefined,
+			inferredStartupUrl: undefined,
 			needsConfigurationPrompt: true,
 			canStartServerWithoutInstall: false,
 		};
@@ -670,11 +713,51 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy), true);
 	});
 
+	test('unresolved preview configuration allows server start with inferred startup URL', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: undefined,
+			inferredStartupUrl: 'https://local.preview.example.test:3001/app',
+			needsConfigurationPrompt: true,
+			canStartServerWithoutInstall: false,
+		}), false);
+	});
+
 	test('resolved preview configuration does not block server start', () => {
 		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
 			configuredUrl: 'https://local.preview.example.test:3001/',
 			needsConfigurationPrompt: true,
 		}), false);
+	});
+
+	test('inferred startup URL prefers current branch verified URL adapted to assigned port', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewInferredStartupUrl({
+			port: 3002,
+			branchRuntime: {
+				lastSuccessfulUrl: 'https://local.preview.example.test:3001/branch-route',
+				lastSuccessfulAt: 200,
+			},
+			repoRuntimes: [{
+				lastSuccessfulUrl: 'https://local.preview.example.test:3003/repo-route',
+				lastSuccessfulAt: 300,
+			}],
+		}), 'https://local.preview.example.test:3002/branch-route');
+	});
+
+	test('inferred startup URL falls back to newest verified repo URL adapted to assigned port', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewInferredStartupUrl({
+			port: 3002,
+			branchRuntime: {},
+			repoRuntimes: [
+				{
+					lastSuccessfulUrl: 'https://local.preview.example.test:3001/older',
+					lastSuccessfulAt: 100,
+				},
+				{
+					lastSuccessfulUrl: 'https://local.preview.example.test:3003/newer',
+					lastSuccessfulAt: 300,
+				},
+			],
+		}), 'https://local.preview.example.test:3002/newer');
 	});
 
 	test('advertised preview URLs preserve route on the active preview origin', () => {

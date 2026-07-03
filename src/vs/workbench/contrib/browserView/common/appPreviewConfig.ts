@@ -90,6 +90,8 @@ export interface IWorkbenchAppPreviewResolvedServer {
 export interface IWorkbenchAppPreviewBranchRuntime {
 	readonly port?: number;
 	readonly lastUrl?: string;
+	readonly lastSuccessfulUrl?: string;
+	readonly lastSuccessfulAt?: number;
 }
 
 export interface IWorkbenchAppPreviewCommandAttempt {
@@ -139,8 +141,15 @@ export interface IWorkbenchAppPreviewHealthTimeoutPolicy {
 
 export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
 	readonly configuredUrl: string | undefined;
+	readonly inferredStartupUrl?: string | undefined;
 	readonly needsConfigurationPrompt: boolean;
 	readonly canStartServerWithoutInstall?: boolean;
+}
+
+export interface IWorkbenchAppPreviewInferredStartupUrlPolicy {
+	readonly port?: number;
+	readonly branchRuntime?: IWorkbenchAppPreviewBranchRuntime;
+	readonly repoRuntimes?: readonly IWorkbenchAppPreviewBranchRuntime[];
 }
 
 export interface IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy {
@@ -486,11 +495,39 @@ export function getWorkbenchAppPreviewServerStateAfterHealthTimeout(policy: IWor
 }
 
 export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
-	return !policy.configuredUrl?.trim() && policy.needsConfigurationPrompt && !policy.canStartServerWithoutInstall;
+	return !policy.configuredUrl?.trim() && !policy.inferredStartupUrl?.trim() && policy.needsConfigurationPrompt && !policy.canStartServerWithoutInstall;
 }
 
 export function canStartWorkbenchAppPreviewServerWithoutInstall(config: IResolvedWorkbenchAppPreviewDevConfig | undefined): boolean {
 	return !!config && !config.installCommand && !config.corepackInstallCommand;
+}
+
+export function resolveWorkbenchAppPreviewInferredStartupUrl(policy: IWorkbenchAppPreviewInferredStartupUrlPolicy): string | undefined {
+	const branchUrl = getWorkbenchAppPreviewVerifiedRuntimeUrl(policy.branchRuntime, policy.port);
+	if (branchUrl) {
+		return branchUrl;
+	}
+
+	let latest: IWorkbenchAppPreviewBranchRuntime | undefined;
+	for (const runtime of policy.repoRuntimes ?? []) {
+		if (!runtime.lastSuccessfulUrl?.trim()) {
+			continue;
+		}
+		if (!latest || (runtime.lastSuccessfulAt ?? 0) > (latest.lastSuccessfulAt ?? 0)) {
+			latest = runtime;
+		}
+	}
+
+	return getWorkbenchAppPreviewVerifiedRuntimeUrl(latest, policy.port);
+}
+
+function getWorkbenchAppPreviewVerifiedRuntimeUrl(runtime: IWorkbenchAppPreviewBranchRuntime | undefined, port: number | undefined): string | undefined {
+	const url = runtime?.lastSuccessfulUrl?.trim();
+	if (!url) {
+		return undefined;
+	}
+
+	return adaptWorkbenchAppPreviewUrlToPort(url, port);
 }
 
 export function resolveWorkbenchAppPreviewAdvertisedUrl(policy: IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy): string | undefined {

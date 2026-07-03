@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -505,6 +505,11 @@ function getBranchRuntimeKey(branchName: string | undefined): string {
 function getBranchRuntime(storageService: IStorageService, repo: URI, branchName: string | undefined): IWorkbenchAppPreviewBranchRuntime {
 	const runtime = parseBranchRuntimeStore(storageService.get(APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY, StorageScope.APPLICATION));
 	return runtime[repo.toString()]?.[getBranchRuntimeKey(branchName)] ?? {};
+}
+
+function getRepoBranchRuntimes(storageService: IStorageService, repo: URI): readonly IWorkbenchAppPreviewBranchRuntime[] {
+	const runtime = parseBranchRuntimeStore(storageService.get(APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY, StorageScope.APPLICATION));
+	return Object.values(runtime[repo.toString()] ?? {});
 }
 
 function storeBranchRuntime(storageService: IStorageService, repo: URI, branchName: string | undefined, value: IWorkbenchAppPreviewBranchRuntime): void {
@@ -1141,11 +1146,16 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
-		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
 		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
-		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName) : undefined;
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
 		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
 			configuredUrl,
+			inferredStartupUrl,
 			needsConfigurationPrompt,
 			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
 		})) {
@@ -1286,13 +1296,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 		});
 	}
 
-	private async _navigatePreferredUrl(options?: { isNewPreview?: boolean; allowDuringStartup?: boolean; forceNavigate?: boolean; preferRunningServer?: boolean }): Promise<void> {
+	private async _navigatePreferredUrl(options?: { isNewPreview?: boolean; allowDuringStartup?: boolean; forceNavigate?: boolean; preferRunningServer?: boolean }): Promise<string | undefined> {
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		if (!root || !this._preview || this._preview.isDisposed()) {
-			return;
+			return undefined;
 		}
 		if (this._previewStartupInProgress && !options?.allowDuringStartup) {
-			return;
+			return undefined;
 		}
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
@@ -1320,7 +1330,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			if (branchChanged || options?.forceNavigate || options?.preferRunningServer) {
 				this._showPreviewSetupState(root, branchName);
 			}
-			return;
+			return undefined;
 		}
 
 		this._navigatePreviewUrl(url, runtime, {
@@ -1330,6 +1340,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			branchOpenedInSession,
 		});
 		this._previewBranchesOpenedThisSession.add(branchSessionKey);
+		return url;
 	}
 
 	private _shouldForcePreferredNavigation(forceNavigate: boolean, isNewPreview: boolean, branchOpenedInSession: boolean): boolean {
@@ -1425,7 +1436,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 	}
 
-	private async _resolveRunnablePreviewServerConfig(root: URI, branchName: string | undefined, devConfig?: IWorkbenchAppPreviewDevConfig): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+	private async _resolveRunnablePreviewServerConfig(root: URI, branchName: string | undefined, devConfig?: IWorkbenchAppPreviewDevConfig, inferredStartupUrl?: string): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
 		const resolvedDevConfig = devConfig ?? await readDevConfig(this._fileService, root);
 		if (resolvedDevConfig) {
 			const resolved = resolveWorkbenchAppPreviewDevConfig(resolvedDevConfig, branchName);
@@ -1435,7 +1446,34 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		const previewConfig = await readPreviewConfig(this._fileService, root);
-		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName));
+		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName) ?? inferredStartupUrl);
+	}
+
+	private _resolveInferredPreviewStartupUrl(root: URI, branchName: string | undefined, port: number | undefined): string | undefined {
+		return resolveWorkbenchAppPreviewInferredStartupUrl({
+			port,
+			branchRuntime: getBranchRuntime(this._storageService, root, branchName),
+			repoRuntimes: getRepoBranchRuntimes(this._storageService, root),
+		});
+	}
+
+	private _storeSuccessfulPreviewUrl(root: URI, branchName: string | undefined, url: string | undefined): void {
+		if (!url) {
+			return;
+		}
+
+		const normalized = normalizeHttpUrl(url);
+		if (!normalized) {
+			return;
+		}
+
+		storeBranchRuntime(this._storageService, root, branchName, {
+			...getBranchRuntime(this._storageService, root, branchName),
+			port: this._serverPort,
+			lastUrl: normalized,
+			lastSuccessfulUrl: normalized,
+			lastSuccessfulAt: Date.now()
+		});
 	}
 
 	private _showPreviewSetupState(root: URI, branchName: string | undefined): void {
@@ -2018,7 +2056,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}));
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
-		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
 		if (configuredUrl && await this._shouldOpenConfiguredPreviewWithoutServer(root, branchName, configuredUrl)) {
 			this._showPreviewStartupPage(this._createPreviewStartupPageState('opening', root, context.branchName, context, {
 				message: localize('appPreviewOpeningConfiguredMessage', "Opening the configured preview for this repository."),
@@ -2031,9 +2070,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 			return this.getCommandStatus();
 		}
 		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
-		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName) : undefined;
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
 		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
 			configuredUrl,
+			inferredStartupUrl,
 			needsConfigurationPrompt,
 			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
 		})) {
@@ -2680,7 +2723,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 					}));
 					this._previewStartupInProgress = false;
 					this._startHealthPolling();
-					await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+					const openedUrl = await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+					this._storeSuccessfulPreviewUrl(root, branchName, openedUrl);
 				} else if (getWorkbenchAppPreviewServerStateAfterHealthTimeout({
 					serverState: this._serverState,
 					serverHealth: this._serverHealth,
@@ -2761,11 +2805,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 	private _getPreviewStartupStages(phase: PreviewStartupPhase): readonly IPreviewStartupStage[] {
 		if (phase === 'setup') {
-			return [{
-				label: localize('appPreviewStageConfigure', "Configure preview"),
-				status: 'current',
-				startedAt: this._previewStartupPhaseStartedAt
-			}];
+			return [];
 		}
 
 		const stageLabels = [
@@ -3008,7 +3048,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 			command: this._serverCommand,
 			cwd: this._serverCwd
 		}));
-		await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+		const openedUrl = await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+		this._storeSuccessfulPreviewUrl(root, branchName, openedUrl);
 	}
 
 	private async _fetchHealth(url: string, init?: RequestInit): Promise<Response> {

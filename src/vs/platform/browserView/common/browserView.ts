@@ -239,6 +239,7 @@ export interface IBrowserViewAuthNavigationRequest {
 	readonly currentUrl: string | undefined;
 	readonly targetUrl: string;
 	readonly inAuthWindow?: boolean;
+	readonly hasActiveAuthWindow?: boolean;
 }
 
 export type BrowserViewAuthNavigationAction = 'allow' | 'openInternal' | 'returnToPreview';
@@ -344,6 +345,10 @@ export function getBrowserViewAuthNavigationAction(request: IBrowserViewAuthNavi
 }
 
 export function getBrowserViewAuthWindowOpenAction(request: IBrowserViewAuthNavigationRequest): BrowserViewAuthWindowOpenAction {
+	if (request.kind === BrowserViewKind.AppPreview && request.hasActiveAuthWindow && isBrowserViewWebUrl(request.targetUrl) && !isBrowserViewLocalHttpUrl(request.targetUrl)) {
+		return 'reuseAuthWindow';
+	}
+
 	const navigationAction = getBrowserViewAuthNavigationAction(request);
 	if (navigationAction !== 'allow') {
 		return navigationAction;
@@ -377,6 +382,7 @@ export interface IBrowserViewOpenOptions {
 	readonly preserveFocus?: boolean;
 	readonly background?: boolean;
 	readonly pinned?: boolean;
+	readonly isSessionAppPreviewAuth?: boolean;
 	/** The parent view ID. Used by the workbench to place the new tab in the same editor group. */
 	readonly parentViewId?: string;
 	/** When set, open in an auxiliary (new) window with these bounds. */
@@ -405,6 +411,7 @@ export interface IBrowserViewStorageKeys {
 export interface IBrowserViewState {
 	url: string;
 	title: string;
+	isSessionAppPreviewAuth?: boolean;
 	canGoBack: boolean;
 	canGoForward: boolean;
 	loading: boolean;

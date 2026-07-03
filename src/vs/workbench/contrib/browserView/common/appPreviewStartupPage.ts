@@ -221,8 +221,13 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		}
 	}
 	const agentContext = state.agentContext ?? '';
-	const stages = state.stages ?? [];
+	const stages = state.phase === 'setup' ? [] : state.stages ?? [];
 	const showActivity = !!state.command && (state.phase === 'installingDependencies' || state.phase === 'serverStarting' || state.phase === 'healthChecking' || state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies');
+	const showStages = stages.length > 0;
+	const showStageStyles = state.phase !== 'setup';
+	const showTimers = showActivity || stages.some(stage => stage.status === 'current' && !!stage.startedAt);
+	const showStageSpinner = stages.some(stage => stage.status === 'current');
+	const showStartupAnimation = state.phase !== 'emptyRepo' && state.phase !== 'setup' && state.phase !== 'slow' && state.phase !== 'failed' && state.phase !== 'missingDependencies';
 	const detailRows = [
 		state.branchName ? `Branch: ${state.branchName}` : undefined,
 		state.previousBranchName && state.previousBranchName !== state.branchName ? `Previous branch: ${state.previousBranchName}` : undefined,
@@ -240,6 +245,13 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		<span class="stage-label">${escapeHtml(stage.label)}</span>
 		${stage.status === 'current' && stage.startedAt ? `<span class="stage-elapsed" data-started-at="${stage.startedAt}">0s</span>` : ''}
 	</li>`).join('');
+	const statusIcon = state.phase === 'emptyRepo'
+		? '<div class="icon">+</div>'
+		: state.phase === 'setup'
+			? '<div class="icon">?</div>'
+			: state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies'
+				? '<div class="icon">!</div>'
+				: `<span class="startup-animation-frame"><img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true"></span>`;
 
 	const html = `<!doctype html>
 <html lang="en">
@@ -252,11 +264,14 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: var(--app-preview-background); color: var(--app-preview-foreground); font-family: inherit; font-size: 13px; }
 	main { width: min(560px, calc(100vw - 48px)); display: grid; gap: 18px; }
 	.status { display: flex; align-items: center; gap: 14px; }
+	${showStartupAnimation ? `
 	.startup-animation-frame { width: 54px; height: 76px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; }
 	.startup-animation { width: 54px; height: 76px; object-fit: contain; overflow: visible; display: block; }
+	` : ''}
 	.icon { width: 24px; height: 24px; display: grid; place-items: center; border: 1px solid var(--app-preview-accent); border-radius: 50%; color: var(--app-preview-accent); font-size: 14px; font-weight: 600; }
 	h1 { margin: 0; font-size: 20px; font-weight: 600; line-height: 26px; letter-spacing: 0; }
 	p { margin: 0; line-height: 1.45; color: var(--app-preview-muted); }
+	${showStageStyles ? `
 	.stages { margin: 2px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 	.stage { display: grid; grid-template-columns: 20px minmax(0, 1fr) auto; gap: 8px; align-items: center; font-size: 13px; color: var(--app-preview-subtle); }
 	.stage-current { color: var(--app-preview-foreground); font-weight: 600; }
@@ -265,10 +280,13 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	.stage-done .stage-icon { color: var(--app-preview-accent); }
 	.stage-pending { color: var(--app-preview-subtle); }
 	.stage-icon { width: 20px; min-height: 18px; display: grid; place-items: center; text-align: center; font-size: 13px; }
+	${showStageSpinner ? `
 	.stage-spinner { width: 8px; height: 8px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; box-sizing: border-box; animation: app-preview-stage-spinner 900ms linear infinite; }
 	@keyframes app-preview-stage-spinner { to { transform: rotate(360deg); } }
+	` : ''}
 	.stage-label { overflow-wrap: anywhere; }
 	.stage-elapsed { font-weight: 500; color: var(--app-preview-muted); font-variant-numeric: tabular-nums; }
+	` : ''}
 	.activity { min-height: 18px; font-size: 12px; color: var(--app-preview-muted); }
 	.actions { display: flex; flex-wrap: wrap; gap: 8px; }
 	button { appearance: none; border: 0; border-radius: 4px; background: var(--app-preview-accent); color: #ffffff; padding: 6px 10px; font: inherit; font-size: 13px; font-weight: 500; line-height: 18px; cursor: pointer; }
@@ -285,13 +303,13 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 <body>
 <main>
 	<section class="status">
-		${state.phase === 'emptyRepo' ? '<div class="icon">+</div>' : state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies' ? '<div class="icon">!</div>' : `<span class="startup-animation-frame"><img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true"></span>`}
+		${statusIcon}
 		<div>
 			<h1>${escapeHtml(state.title)}</h1>
 			<p>${escapeHtml(state.message)}</p>
 		</div>
 	</section>
-	${stages.length ? `<ol class="stages">${stageRows}</ol>` : ''}
+	${showStages ? `<ol class="stages">${stageRows}</ol>` : ''}
 	${showActivity ? `<div class="activity" data-last-output-at="${state.lastServerOutputAt ?? ''}" aria-live="polite"></div>` : ''}
 	${actions.size ? `<section class="actions">
 		${actionButton('retry', 'Retry')}
@@ -307,6 +325,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 </main>
 <script>
 	const agentContext = ${JSON.stringify(agentContext)};
+	${showTimers ? `
 	const formatElapsed = (startedAt) => {
 		const elapsed = Math.max(0, Math.floor((Date.now() - startedAt) / 1000));
 		return elapsed < 60 ? elapsed + 's' : Math.floor(elapsed / 60) + 'm ' + String(elapsed % 60).padStart(2, '0') + 's';
@@ -328,6 +347,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	};
 	updateTimers();
 	setInterval(updateTimers, 1000);
+	` : ''}
 	for (const button of document.querySelectorAll('button[data-action]')) {
 		button.addEventListener('click', async () => {
 			const action = button.getAttribute('data-action');

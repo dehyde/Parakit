@@ -45,6 +45,7 @@ export class BrowserView extends Disposable {
 	private _currentHistoryHandle: IBrowserHistoryItemHandle | undefined;
 	private _explicitNavigationPending = false;
 	private _appPreviewAuthReturnView: BrowserView | undefined;
+	private _appPreviewAuthChildView: BrowserView | undefined;
 	private _appPreviewAuthCallbackHandled = false;
 
 	readonly debugger: BrowserViewDebugger;
@@ -161,16 +162,15 @@ export class BrowserView extends Disposable {
 				kind: this.owner.kind,
 				currentUrl: this.webContents.getURL(),
 				targetUrl: details.url,
-				inAuthWindow: !!this._appPreviewAuthReturnView
+				inAuthWindow: !!this._appPreviewAuthReturnView,
+				hasActiveAuthWindow: this._hasActiveAppPreviewAuthWindow()
 			});
 			if (authWindowOpenAction === 'returnToPreview') {
 				this._returnAppPreviewAuthCallback(details.url);
 				return { action: 'deny' };
 			}
 			if (authWindowOpenAction === 'reuseAuthWindow') {
-				void this.loadURL(details.url).catch(error => {
-					this.logService.error('[BrowserView] Failed to reuse App Preview auth window.', error);
-				});
+				this._openAppPreviewInternalNavigation(details.url);
 				return { action: 'deny' };
 			}
 			if (authWindowOpenAction === 'openInternal') {
@@ -256,12 +256,28 @@ export class BrowserView extends Disposable {
 	}
 
 	private _openAppPreviewInternalNavigation(url: string, options?: Electron.WebContentsViewConstructorOptions): BrowserView {
+		const returnView = this._appPreviewAuthReturnView ?? this;
+		const existingAuthView = returnView._getActiveAppPreviewAuthChildView();
+		if (existingAuthView) {
+			void existingAuthView.loadURL(url).catch(error => {
+				this.logService.error('[BrowserView] Failed to reuse App Preview auth window.', error);
+			});
+			return existingAuthView;
+		}
+
 		const childView = this._createChildView(url, options, {
 			pinned: true,
 			background: false,
-			parentViewId: this.id,
+			isSessionAppPreviewAuth: true,
+			parentViewId: returnView.id,
 		});
-		childView._appPreviewAuthReturnView = this._appPreviewAuthReturnView ?? this;
+		childView._appPreviewAuthReturnView = returnView;
+		returnView._appPreviewAuthChildView = childView;
+		Event.once(childView.onDidClose)(() => {
+			if (returnView._appPreviewAuthChildView === childView) {
+				returnView._appPreviewAuthChildView = undefined;
+			}
+		});
 		return childView;
 	}
 
@@ -271,11 +287,28 @@ export class BrowserView extends Disposable {
 		}
 
 		this._appPreviewAuthCallbackHandled = true;
-		void this._appPreviewAuthReturnView.loadURL(url).catch(error => {
+		const returnView = this._appPreviewAuthReturnView;
+		if (returnView._appPreviewAuthChildView === this) {
+			returnView._appPreviewAuthChildView = undefined;
+		}
+		void returnView.loadURL(url).catch(error => {
 			this.logService.error('[BrowserView] Failed to return App Preview auth callback.', error);
 		});
 		setTimeout(() => this.dispose(), 0);
 		return true;
+	}
+
+	private _getActiveAppPreviewAuthChildView(): BrowserView | undefined {
+		const childView = this._appPreviewAuthChildView;
+		if (!childView || childView._isDisposed) {
+			return undefined;
+		}
+
+		return childView;
+	}
+
+	private _hasActiveAppPreviewAuthWindow(): boolean {
+		return !!(this._appPreviewAuthReturnView ?? this)._getActiveAppPreviewAuthChildView();
 	}
 
 	private setupEventListeners(): void {
@@ -338,7 +371,8 @@ export class BrowserView extends Disposable {
 					kind: this.owner.kind,
 					currentUrl: this.webContents.getURL(),
 					targetUrl: event.url,
-					inAuthWindow: !!this._appPreviewAuthReturnView
+					inAuthWindow: !!this._appPreviewAuthReturnView,
+					hasActiveAuthWindow: this._hasActiveAppPreviewAuthWindow()
 				});
 				if (authAction === 'returnToPreview' && this._appPreviewAuthReturnView) {
 					event.preventDefault();
@@ -452,7 +486,8 @@ export class BrowserView extends Disposable {
 				kind: this.owner.kind,
 				currentUrl: this.webContents.getURL(),
 				targetUrl: url,
-				inAuthWindow: !!this._appPreviewAuthReturnView
+				inAuthWindow: !!this._appPreviewAuthReturnView,
+				hasActiveAuthWindow: this._hasActiveAppPreviewAuthWindow()
 			});
 			if (authAction === 'returnToPreview' && this._returnAppPreviewAuthCallback(url)) {
 				return;
@@ -616,6 +651,7 @@ export class BrowserView extends Disposable {
 		return {
 			url,
 			title: webContents.getTitle(),
+			isSessionAppPreviewAuth: !!this._appPreviewAuthReturnView,
 			canGoBack: webContents.navigationHistory.canGoBack(),
 			canGoForward: webContents.navigationHistory.canGoForward(),
 			loading: webContents.isLoading(),

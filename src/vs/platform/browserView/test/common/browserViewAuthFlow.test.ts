@@ -92,6 +92,15 @@ suite('BrowserView Auth Flow', () => {
 		}), 'reuseAuthWindow');
 	});
 
+	test('reuses the active auth tab for repeated App Preview auth popups', () => {
+		assert.strictEqual(getBrowserViewAuthWindowOpenAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'http://127.0.0.1:3000/',
+			targetUrl: 'https://login.example.com/oauth',
+			hasActiveAuthWindow: true,
+		}), 'reuseAuthWindow');
+	});
+
 	test('does not intercept non-web protocols', () => {
 		assert.strictEqual(getBrowserViewAuthNavigationAction({
 			kind: BrowserViewKind.AppPreview,
