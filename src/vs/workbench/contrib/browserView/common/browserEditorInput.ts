@@ -238,7 +238,7 @@ export class BrowserEditorInput extends EditorInput {
 		if (!this._tabAction) {
 			this._tabAction = this._register(new Action(
 				CONFIGURE_APP_PREVIEW_URL_COMMAND_ID,
-				localize('configureAppPreviewTabAction', "Configure Preview URL"),
+				localize('configureAppPreviewTabAction', "Set Default URL"),
 				'codicon codicon-settings',
 				true,
 				() => this.commandService.executeCommand(CONFIGURE_APP_PREVIEW_URL_COMMAND_ID)

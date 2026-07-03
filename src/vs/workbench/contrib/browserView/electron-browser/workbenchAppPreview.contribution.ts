@@ -24,7 +24,7 @@ import { IClipboardService } from '../../../../platform/clipboard/common/clipboa
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
-import { FileChangeType, IFileService } from '../../../../platform/files/common/files.js';
+import { FileChangeType, IFileService, type IFileStat } from '../../../../platform/files/common/files.js';
 import { ILocalGitService } from '../../../../platform/git/common/localGitService.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -77,6 +77,18 @@ const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
 const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
 const PREVIEW_TERMINAL_READY_TIMEOUT = 10_000;
 const PREVIEW_TERMINAL_READY_ATTEMPTS = 2;
+const PREVIEW_STATIC_HTML_INDEX_DIRS = ['', 'docs', 'public', 'dist', 'build', 'site', 'out'];
+const PREVIEW_STATIC_HTML_SCAN_DIRS: readonly { readonly dir: string; readonly depth: number }[] = [
+	{ dir: '', depth: 0 },
+	{ dir: 'docs', depth: 2 },
+	{ dir: 'public', depth: 2 },
+	{ dir: 'static', depth: 2 },
+	{ dir: 'dist', depth: 2 },
+	{ dir: 'build', depth: 2 },
+	{ dir: 'site', depth: 2 },
+	{ dir: 'out', depth: 2 },
+];
+const PREVIEW_STATIC_HTML_SCAN_LIMIT = 80;
 
 export const ConfigureWorkbenchAppPreviewUrlCommandId = 'workbench.action.agentSessions.configureAppPreviewUrl';
 export const ClearWorkbenchAppPreviewOverrideCommandId = 'workbench.action.appPreview.clearOverride';
@@ -446,7 +458,11 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		// Continue to static HTML detection when package.json is missing or invalid.
 	}
 
-	for (const dir of ['', 'docs', 'public', 'dist', 'build', 'site', 'out']) {
+	return resolveStaticHtmlDevConfig(fileService, repository);
+}
+
+async function resolveStaticHtmlDevConfig(fileService: IFileService, repository: URI): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+	for (const dir of PREVIEW_STATIC_HTML_INDEX_DIRS) {
 		const htmlPath = dir ? joinPath(repository, dir, 'index.html') : joinPath(repository, 'index.html');
 		try {
 			await fileService.stat(htmlPath);
@@ -456,7 +472,71 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		}
 	}
 
-	return undefined;
+	const htmlFiles: string[] = [];
+	for (const { dir, depth } of PREVIEW_STATIC_HTML_SCAN_DIRS) {
+		await collectStaticHtmlFiles(fileService, repository, dir, depth, htmlFiles);
+		if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+			break;
+		}
+	}
+
+	const selected = selectWorkbenchAppPreviewStaticHtmlFile(htmlFiles);
+	if (!selected) {
+		return undefined;
+	}
+
+	const { serveDir, initialPath } = splitStaticHtmlFile(selected);
+	return resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir, initialPath);
+}
+
+async function collectStaticHtmlFiles(fileService: IFileService, repository: URI, relativeDir: string, depth: number, htmlFiles: string[]): Promise<void> {
+	if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+		return;
+	}
+
+	let stat: IFileStat;
+	try {
+		stat = await fileService.resolve(resolveStaticHtmlResource(repository, relativeDir));
+	} catch {
+		return;
+	}
+
+	const children = [...(stat.children ?? [])].sort((first, second) => first.name.localeCompare(second.name));
+	for (const child of children) {
+		if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+			return;
+		}
+
+		const relativePath = joinStaticHtmlPath(relativeDir, child.name);
+		if (child.isFile && child.name.toLowerCase().endsWith('.html')) {
+			htmlFiles.push(relativePath);
+			continue;
+		}
+
+		if (child.isDirectory && depth > 0) {
+			await collectStaticHtmlFiles(fileService, repository, relativePath, depth - 1, htmlFiles);
+		}
+	}
+}
+
+function resolveStaticHtmlResource(repository: URI, relativePath: string): URI {
+	return relativePath ? joinPath(repository, ...relativePath.split('/')) : repository;
+}
+
+function joinStaticHtmlPath(parent: string, child: string): string {
+	return parent ? `${parent}/${child}` : child;
+}
+
+function splitStaticHtmlFile(relativePath: string): { serveDir: string; initialPath: string } {
+	const lastSlash = relativePath.lastIndexOf('/');
+	if (lastSlash === -1) {
+		return { serveDir: '.', initialPath: relativePath };
+	}
+
+	return {
+		serveDir: relativePath.slice(0, lastSlash) || '.',
+		initialPath: relativePath.slice(lastSlash + 1),
+	};
 }
 
 function parsePreviewOverrides(raw: string | undefined): IAppPreviewOverrides {
@@ -727,12 +807,12 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 		const dialog = $('.app-preview-settings-modal');
 		dialog.setAttribute('role', 'dialog');
 		dialog.setAttribute('aria-modal', 'true');
-		dialog.setAttribute('aria-label', localize('appPreviewSettingsDialogAria', "Branch Preview Settings"));
+		dialog.setAttribute('aria-label', localize('appPreviewSettingsDialogAria', "Branch Default URL Settings"));
 		block.append(dialog);
 
 		const header = $('.app-preview-settings-header');
 		header.append(
-			$('.app-preview-settings-title', undefined, localize('appPreviewSettingsTitle', "Branch Preview Settings")),
+			$('.app-preview-settings-title', undefined, localize('appPreviewSettingsTitle', "Branch Default URL")),
 			$('.app-preview-settings-branch', undefined, model.branchName)
 		);
 		dialog.append(header);
@@ -751,9 +831,9 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 			primaryAction = 'saveShared';
 			const defaultUrl = model.inheritedSharedUrl ? adaptWorkbenchAppPreviewUrlToPort(model.inheritedSharedUrl, model.assignedPort) ?? model.inheritedSharedUrl : '';
 			const field = createSettingsUrlField(
-				localize('appPreviewSettingsSharedUrlLabel', "Preview URL"),
+				localize('appPreviewSettingsSharedUrlLabel', "Default URL"),
 				defaultUrl,
-				localize('appPreviewSettingsSharedCaption', "Branch default")
+				localize('appPreviewSettingsSharedCaption', "This opens by default for this branch.")
 			);
 			primaryInput = field.input;
 			primaryUrlField = field;
@@ -766,34 +846,34 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 			primaryAction = 'saveLocal';
 			const usesLocalOverride = Boolean(model.localOverrideUrl);
 			const field = createSettingsUrlField(
-				localize('appPreviewSettingsLocalOverrideLabel', "Preview URL"),
+				localize('appPreviewSettingsLocalOverrideLabel', "Default URL"),
 				model.localOverrideUrl ?? adaptWorkbenchAppPreviewUrlToPort(model.sharedBranchUrl, model.assignedPort) ?? model.sharedBranchUrl,
 				usesLocalOverride
 					? localize('appPreviewSettingsLocalCaption', "Local override")
-					: localize('appPreviewSettingsBranchDefaultCaption', "Using branch default")
+					: localize('appPreviewSettingsBranchDefaultCaption', "This opens by default for this branch.")
 			);
 			primaryInput = field.input;
 			primaryUrlField = field;
 			body.append(field.row);
 
 			const sharedSummary = $('.app-preview-settings-shared-summary');
-			const revealShared = createSettingsButton(localize('appPreviewSettingsRevealShared', "Edit branch default"), 'app-preview-settings-link-button');
+			const revealShared = createSettingsButton(localize('appPreviewSettingsRevealShared', "Edit branch default URL"), 'app-preview-settings-link-button');
 			sharedSummary.append(revealShared);
 			body.append(sharedSummary);
 
 			const sharedPanel = $('.app-preview-settings-danger-panel');
 			sharedPanel.hidden = true;
-			const sharedField = createSettingsField(localize('appPreviewSettingsSharedEditLabel', "Branch default"), model.sharedBranchUrl, 'http://127.0.0.1:${PORT}/');
+			const sharedField = createSettingsField(localize('appPreviewSettingsSharedEditLabel', "Branch default URL"), model.sharedBranchUrl, 'http://127.0.0.1:${PORT}/');
 			const sharedPortPreview = createPortDetectionPreview(sharedField.input);
 			const confirmLabel = document.createElement('label');
 			confirmLabel.className = 'app-preview-settings-checkbox';
 			const confirm = document.createElement('input');
 			confirm.type = 'checkbox';
 			confirmLabel.append(confirm, document.createTextNode(localize('appPreviewSettingsSharedConfirm', "Apply for everyone on this branch.")));
-			const saveShared = createSettingsButton(localize('appPreviewSettingsSaveShared', "Save Default"), 'app-preview-settings-danger-button');
+			const saveShared = createSettingsButton(localize('appPreviewSettingsSaveShared', "Save default URL"), 'app-preview-settings-danger-button');
 			saveShared.disabled = true;
 			sharedPanel.append(
-				$('.app-preview-settings-warning', undefined, localize('appPreviewSettingsSharedWarning', "Changes the branch default.")),
+				$('.app-preview-settings-warning', undefined, localize('appPreviewSettingsSharedWarning', "Changes what opens by default for this branch.")),
 				sharedField.row,
 				sharedPortPreview.element,
 				confirmLabel,
@@ -1157,6 +1237,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			configuredUrl,
 			inferredStartupUrl,
 			needsConfigurationPrompt,
+			hasRunnableServerConfig: !!runnableConfig,
 			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
 		})) {
 			this._showPreviewSetupState(root, branchName);
@@ -1225,7 +1306,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			});
 		} else if (action === 'configure') {
 			void this._configurePreviewFromStartupPage().catch(error => {
-				this._logService.error('[WorkbenchAppPreview] Failed to configure preview URL from startup page.', error);
+				this._logService.error('[WorkbenchAppPreview] Failed to set default URL from startup page.', error);
 			});
 		} else if (action === 'pasteRepoUrl') {
 			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.PasteRepoUrl).catch(error => {
@@ -1523,9 +1604,9 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		this._previewStartupInProgress = false;
 		this._needsConfigurationPrompt = true;
-		this._serverMessage = `No preview URL is configured for ${branchName ?? 'the current branch'}. Configure a branch preview URL before starting App Preview.`;
+		this._serverMessage = `No default URL is set for ${branchName ?? 'the current branch'}. Set the URL that opens by default for this branch.`;
 		this._showPreviewStartupPage(this._createPreviewStartupPageState('setup', root, branchName, this._lastWorkspaceContext, {
-			message: localize('appPreviewSetupMessage', "No preview URL is configured for this branch. Configure a branch preview URL before starting App Preview."),
+			message: localize('appPreviewSetupMessage', "Set the URL that opens by default for this branch."),
 			url: this._serverUrl,
 			healthUrl: this._serverHealthUrl,
 			command: this._serverCommand,
@@ -2155,6 +2236,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			configuredUrl,
 			inferredStartupUrl,
 			needsConfigurationPrompt,
+			hasRunnableServerConfig: !!runnableConfig,
 			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
 		})) {
 			this._showPreviewSetupState(root, branchName);
@@ -2208,13 +2290,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 		const normalized = normalizeHttpUrl((url ?? this._serverUrl ?? '').trim());
 		if (!normalized) {
-			throw new Error('No valid preview URL is available to promote.');
+			throw new Error('No valid URL is available to save as the branch default.');
 		}
 		const branchName = await this._resolveWorkspaceBranchName(root);
 		await writeProjectPreviewUrl(this._fileService, root, branchName, normalized);
 		this._needsConfigurationPrompt = false;
 		await this._navigatePreferredUrl();
-		this._serverMessage = `Saved ${normalized} as the project preview URL${branchName ? ` for ${branchName}` : ''}.`;
+		this._serverMessage = `Saved ${normalized} as the default URL${branchName ? ` for ${branchName}` : ''}.`;
 		return this.getPreviewStatus();
 	}
 
@@ -2227,7 +2309,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 	async navigateAppPreview(url: string | undefined): Promise<IAppPreviewCommandStatus> {
 		const normalized = normalizeHttpUrl((url ?? '').trim());
 		if (!normalized) {
-			throw new Error('No valid App Preview URL was provided.');
+			throw new Error('No valid default URL was provided.');
 		}
 
 		const root = getWorkspaceRoot(this._workspaceContextService);
@@ -2773,7 +2855,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			if (this._serverState === 'starting') {
 				this._serverState = 'running';
 				this._serverMessage = this._needsConfigurationPrompt
-					? `Opened ${resolvedServer.url}. Ask the user whether to save this as the branch preview URL.`
+					? `Opened ${resolvedServer.url}. Ask the user whether to save this as the default URL for this branch.`
 					: `Opened ${resolvedServer.url}.`;
 			}
 			if (this._serverState !== 'running') {
@@ -2951,7 +3033,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			phase === 'slow' ? localize('appPreviewSlowHint', "The server may still be compiling or waiting on a dependency.") : undefined,
 			phase === 'missingDependencies' ? localize('appPreviewMissingDependenciesHint', "Dependency install did not complete. Check the terminal logs or retry the preview server.") : undefined,
 			phase === 'failed' ? localize('appPreviewFailedHint', "Check the terminal logs or restart the preview server.") : undefined,
-			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a saved preview URL.") : undefined,
+			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a default URL.") : undefined,
 		].filter((value): value is string => !!value);
 		const actions: IPreviewStartupPageState['actions'] = phase === 'slow'
 			? ['retry', 'restart', 'logs', 'copy']
@@ -3604,8 +3686,8 @@ class RestartPreviewServerTool extends AppPreviewTool {
 const PromotePreviewUrlToolData: IToolData = {
 	id: AppPreviewToolReferenceName.PromotePreviewUrl,
 	toolReferenceName: AppPreviewToolReferenceName.PromotePreviewUrl,
-	displayName: localize('promotePreviewUrlTool.displayName', "Promote Preview URL"),
-	modelDescription: 'After explicit user approval, save the current or provided preview URL into .designer/preview.json for the current Git branch.',
+	displayName: localize('promotePreviewUrlTool.displayName', "Save Default URL"),
+	modelDescription: 'After explicit user approval, save the current or provided URL as the default URL for the current Git branch in .designer/preview.json.',
 	icon: Codicon.save,
 	source: ToolDataSource.Internal,
 	inputSchema: {
@@ -3622,11 +3704,11 @@ const PromotePreviewUrlToolData: IToolData = {
 class PromotePreviewUrlTool extends AppPreviewTool {
 	override async prepareToolInvocation(): Promise<IPreparedToolInvocation> {
 		return {
-			invocationMessage: localize('promotePreviewUrlTool.invocation', "Saving preview URL"),
-			pastTenseMessage: localize('promotePreviewUrlTool.past', "Saved preview URL"),
+			invocationMessage: localize('promotePreviewUrlTool.invocation', "Saving default URL"),
+			pastTenseMessage: localize('promotePreviewUrlTool.past', "Saved default URL"),
 			confirmationMessages: {
-				title: localize('promotePreviewUrlTool.confirmTitle', "Save Project Preview URL?"),
-				message: localize('promotePreviewUrlTool.confirmMessage', "This writes the preview URL into .designer/preview.json for the current branch."),
+				title: localize('promotePreviewUrlTool.confirmTitle', "Save Default URL?"),
+				message: localize('promotePreviewUrlTool.confirmMessage', "This writes the URL that opens by default for the current branch into .designer/preview.json."),
 			},
 		};
 	}
@@ -3641,7 +3723,7 @@ class ConfigureWorkbenchAppPreviewUrlAction extends Action2 {
 	constructor() {
 		super({
 			id: ConfigureWorkbenchAppPreviewUrlCommandId,
-			title: localize2('configureWorkbenchAppPreviewUrl', "Override Preview URL"),
+			title: localize2('configureWorkbenchAppPreviewUrl', "Set Default URL"),
 			f1: true,
 		});
 	}
@@ -3702,7 +3784,7 @@ class ClearWorkbenchAppPreviewOverrideAction extends Action2 {
 	constructor() {
 		super({
 			id: ClearWorkbenchAppPreviewOverrideCommandId,
-			title: localize2('clearWorkbenchAppPreviewOverride', "Clear Preview Override"),
+			title: localize2('clearWorkbenchAppPreviewOverride', "Clear Default URL Override"),
 			f1: true,
 		});
 	}
@@ -3748,7 +3830,7 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 	constructor() {
 		super({
 			id: EditWorkbenchAppPreviewProjectUrlCommandId,
-			title: localize2('editWorkbenchAppPreviewProjectUrl', "Edit Project Preview URL"),
+			title: localize2('editWorkbenchAppPreviewProjectUrl', "Edit Default URL"),
 			f1: true,
 		});
 	}
@@ -3771,7 +3853,7 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 				{ label: localize('editProjectDefault', "Default"), description: localize('editProjectDefaultDescription', "Shared default for this repo") },
 			], {
 				canPickMany: false,
-				placeHolder: localize('editProjectPreviewScope', "Choose which project preview URL to edit"),
+				placeHolder: localize('editProjectPreviewScope', "Choose which default URL to edit"),
 				ignoreFocusLost: true,
 			});
 			if (!pick) {
@@ -3783,14 +3865,14 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 		const config = await readPreviewConfig(fileService, root);
 		const currentUrl = getPreviewUrlForBranch(config, targetBranch);
 		const url = await quickInputService.input({
-			title: localize('editProjectPreviewUrlTitle', "Edit Project Preview URL"),
-			prompt: localize('editProjectPreviewUrlPrompt', "Enter the shared project preview URL."),
+			title: localize('editProjectPreviewUrlTitle', "Edit Default URL"),
+			prompt: localize('editProjectPreviewUrlPrompt', "Enter the URL that opens by default."),
 			placeHolder: 'http://localhost:3000',
 			value: currentUrl ?? '',
 			ignoreFocusLost: true,
 			validateInput: async value => {
 				if (!value.trim()) {
-					return localize('requiredProjectPreviewUrl', "Enter a preview URL.");
+					return localize('requiredProjectPreviewUrl', "Enter a default URL.");
 				}
 				return normalizeHttpUrl(value.trim()) ? undefined : localize('invalidProjectPreviewUrl', "Enter a valid http or https URL.");
 			}

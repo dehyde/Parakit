@@ -151,6 +151,7 @@ export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
 	readonly configuredUrl: string | undefined;
 	readonly inferredStartupUrl?: string | undefined;
 	readonly needsConfigurationPrompt: boolean;
+	readonly hasRunnableServerConfig?: boolean;
 	readonly canStartServerWithoutInstall?: boolean;
 }
 
@@ -511,7 +512,8 @@ export function getWorkbenchAppPreviewServerStateAfterHealthTimeout(policy: IWor
 }
 
 export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
-	return !policy.configuredUrl?.trim() && !policy.inferredStartupUrl?.trim() && policy.needsConfigurationPrompt && !policy.canStartServerWithoutInstall;
+	const hasRunnableServerConfig = policy.hasRunnableServerConfig || policy.canStartServerWithoutInstall;
+	return !policy.configuredUrl?.trim() && !policy.inferredStartupUrl?.trim() && policy.needsConfigurationPrompt && !hasRunnableServerConfig;
 }
 
 export function canStartWorkbenchAppPreviewServerWithoutInstall(config: IResolvedWorkbenchAppPreviewDevConfig | undefined): boolean {
@@ -737,11 +739,69 @@ function getWorkbenchAppPreviewDevServerScriptArgs(script: string): string {
 	return ' -- --port ${PORT}';
 }
 
-export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string): IResolvedWorkbenchAppPreviewDevConfig {
+function normalizeWorkbenchAppPreviewStaticHtmlPath(path: string): string | undefined {
+	const withoutLeadingSlash = path.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+	const segments = withoutLeadingSlash.split('/').filter(segment => segment && segment !== '.');
+	if (!segments.length || segments.some(segment => segment === '..')) {
+		return undefined;
+	}
+
+	const normalized = segments.join('/');
+	return normalized.toLowerCase().endsWith('.html') ? normalized : undefined;
+}
+
+function getWorkbenchAppPreviewStaticHtmlPathScore(path: string): number {
+	const lower = path.toLowerCase();
+	const segments = lower.split('/');
+	const basename = segments[segments.length - 1] ?? lower;
+	let score = segments.length * 10;
+
+	if (basename === 'index.html') {
+		score -= 1000;
+	}
+	if (segments.includes('docs')) {
+		score -= 20;
+	}
+	if (segments.includes('architecture')) {
+		score -= 20;
+	}
+	if (basename.includes('architecture')) {
+		score -= 12;
+	}
+	if (basename.includes('overview') || basename.includes('home') || basename.includes('readme')) {
+		score -= 8;
+	}
+	if (basename.includes('diagram') || basename.includes('map')) {
+		score += 8;
+	}
+
+	return score;
+}
+
+export function selectWorkbenchAppPreviewStaticHtmlFile(paths: readonly string[]): string | undefined {
+	const candidates = paths
+		.map(path => normalizeWorkbenchAppPreviewStaticHtmlPath(path))
+		.filter((path): path is string => !!path);
+
+	candidates.sort((first, second) => {
+		const scoreDifference = getWorkbenchAppPreviewStaticHtmlPathScore(first) - getWorkbenchAppPreviewStaticHtmlPathScore(second);
+		return scoreDifference || first.localeCompare(second);
+	});
+
+	return candidates[0];
+}
+
+function encodeWorkbenchAppPreviewStaticHtmlPath(path: string | undefined): string {
+	const normalized = path ? normalizeWorkbenchAppPreviewStaticHtmlPath(path) : undefined;
+	return normalized?.split('/').map(encodeURIComponent).join('/') ?? '';
+}
+
+export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string, initialPath?: string): IResolvedWorkbenchAppPreviewDevConfig {
+	const encodedInitialPath = encodeWorkbenchAppPreviewStaticHtmlPath(initialPath);
 	return {
 		command: `python3 -m http.server \${PORT} --directory ${serveDir}`,
 		portEnv: DEFAULT_DEV_PORT_ENV,
-		url: DEFAULT_DEV_URL_TEMPLATE,
+		url: encodedInitialPath ? `${DEFAULT_DEV_URL_TEMPLATE}${encodedInitialPath}` : DEFAULT_DEV_URL_TEMPLATE,
 		healthPath: '/',
 	};
 }

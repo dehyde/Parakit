@@ -201,7 +201,7 @@ export function getWorkbenchAppPreviewStartupTitle(phase: WorkbenchAppPreviewSta
 		return 'Preview dependencies need attention';
 	}
 	if (phase === 'setup') {
-		return 'Preview needs configuration';
+		return 'Default URL not set';
 	}
 	if (phase === 'emptyRepo') {
 		return 'Add a repo to preview your app';
@@ -248,7 +248,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	const statusIcon = state.phase === 'emptyRepo'
 		? '<div class="icon">+</div>'
 		: state.phase === 'setup'
-			? '<div class="icon">?</div>'
+			? ''
 			: state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies'
 				? '<div class="icon">!</div>'
 				: `<span class="startup-animation-frame"><img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true"></span>`;
@@ -316,7 +316,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		${actionButton('restart', 'Restart preview server')}
 		${actionButton('logs', 'Show terminal logs')}
 		${actionButton('copy', 'Copy context for agent')}
-		${actionButton('configure', 'Configure URL')}
+		${actionButton('configure', 'Set default URL')}
 		${actionButton('pasteRepoUrl', 'Paste repo URL')}
 		${actionButton('openLocalFolder', 'Open local folder')}
 	</section>` : ''}
