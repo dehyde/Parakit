@@ -1011,6 +1011,7 @@ suite('Workbench App Preview', () => {
 	test('uses no-cors health checks for loopback preview URLs', () => {
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('http://127.0.0.1:10036/'), 'no-cors');
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('http://localhost:5173/'), 'no-cors');
+		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('https://local.preview.example.test:3007/'), 'no-cors');
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('https://example.com/'), 'cors');
 	});
 

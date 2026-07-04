@@ -222,7 +222,7 @@ export function normalizeWorkbenchAppPreviewLoopbackUrl(url: string): string {
 export function getWorkbenchAppPreviewHealthFetchMode(url: string): 'cors' | 'no-cors' {
 	try {
 		const parsed = new URL(url);
-		if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLoopbackHost(parsed.hostname)) {
+		if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLocalHost(parsed.hostname)) {
 			return 'no-cors';
 		}
 	} catch {
