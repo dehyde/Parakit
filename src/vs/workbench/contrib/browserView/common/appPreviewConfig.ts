@@ -768,7 +768,7 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 
 	const envUrl = getWorkbenchAppPreviewPublicEnvUrl(env);
 	const resolvedUrl = url?.trim() || envUrl || DEFAULT_DEV_URL_TEMPLATE;
-	const fixedPort = getWorkbenchAppPreviewUrlFixedPort(resolvedUrl) ?? parseWorkbenchAppPreviewPort(env?.PORT);
+	const configuredFixedPort = getWorkbenchAppPreviewUrlFixedPort(resolvedUrl) ?? parseWorkbenchAppPreviewPort(env?.PORT);
 	const scriptCommandPrefix = packageManager?.scriptCommandPrefix?.trim() || 'npm run';
 	const corepackScriptCommandPrefix = packageManager?.corepackScriptCommandPrefix?.trim();
 	const installCommand = packageManager?.dependencyReadiness && packageManager.dependencyReadiness !== 'ready'
@@ -778,6 +778,7 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	for (const scriptName of ['dev', 'start', 'serve']) {
 		const script = scripts[scriptName];
 		if (typeof script === 'string') {
+			const fixedPort = configuredFixedPort ?? getWorkbenchAppPreviewScriptFixedPort(script);
 			const scriptArgs = getWorkbenchAppPreviewDevServerScriptArgs(script);
 			return {
 				command: `${scriptCommandPrefix} ${scriptName}${scriptArgs}`,
@@ -794,6 +795,28 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	}
 
 	return undefined;
+}
+
+function getWorkbenchAppPreviewScriptFixedPort(script: string): number | undefined {
+	const ports = new Set<number>();
+	collectWorkbenchAppPreviewScriptPorts(script, /(?:^|[\s"'`(;&|])(?:--port|-p)(?:=|\s+)([0-9]{1,5})(?=$|[\s"'`);&|])/gi, ports);
+	collectWorkbenchAppPreviewScriptPorts(script, /(?:^|[\s"'`(;&|])PORT=([0-9]{1,5})(?=$|[\s"'`);&|])/g, ports);
+	collectWorkbenchAppPreviewScriptPorts(script, /\b(?:tcp|https?|https?-get):(?:(?:\/\/)?[^:\s"'`;&|)]*:)?([0-9]{1,5})(?=$|[\/\s"'`);&|])/gi, ports);
+
+	if (ports.size !== 1) {
+		return undefined;
+	}
+
+	return ports.values().next().value;
+}
+
+function collectWorkbenchAppPreviewScriptPorts(script: string, pattern: RegExp, ports: Set<number>): void {
+	for (const match of script.matchAll(pattern)) {
+		const port = parseWorkbenchAppPreviewPort(match[1]);
+		if (port !== undefined) {
+			ports.add(port);
+		}
+	}
 }
 
 function getWorkbenchAppPreviewDevServerScriptArgs(script: string): string {

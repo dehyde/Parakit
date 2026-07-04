@@ -958,6 +958,49 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(config ? getWorkbenchAppPreviewDevConfigFixedPort(config) : undefined, 3001);
 	});
 
+	test('heuristic dev config infers fixed app port from startup script port flag', () => {
+		const config = resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'vite --host 127.0.0.1 --port 3000',
+		});
+
+		assert.deepStrictEqual(config, {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			fixedPort: 3000,
+		});
+		assert.deepStrictEqual(config ? applyWorkbenchAppPreviewDevPort(config, getWorkbenchAppPreviewDevConfigFixedPort(config) ?? 4321) : undefined, {
+			command: 'npm run start',
+			env: { BROWSER: 'none', PORT: '3000' },
+			url: 'http://127.0.0.1:3000/',
+			healthUrl: 'http://127.0.0.1:3000/',
+		});
+	});
+
+	test('heuristic dev config infers fixed app port from startup script wait-on target', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: "npx concurrently --kill-others 'npx nx run-many -t start -p twenty-server twenty-front' 'npx wait-on tcp:3000 && npx nx run twenty-server:worker'",
+		}), {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			fixedPort: 3000,
+		});
+	});
+
+	test('heuristic dev config does not infer fixed app port from ambiguous startup scripts', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'vite --port 3000 && wait-on tcp:4000',
+		}), {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+		});
+	});
+
 	test('static HTML config serves the detected directory with Python', () => {
 		assert.deepStrictEqual(resolveWorkbenchAppPreviewStaticHtmlConfig('public'), {
 			command: 'python3 -m http.server ${PORT} --directory public',
