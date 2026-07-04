@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommand, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../../common/appPreviewPackageManager.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyArtifactMtime, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommand, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../../common/appPreviewPackageManager.js';
 
 suite('AppPreviewPackageManager', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -76,7 +76,8 @@ suite('AppPreviewPackageManager', () => {
 		assert.deepStrictEqual([
 			detectWorkbenchAppPreviewPackageManager({ hasPnpmModulesYaml: true, hasYarnLock: true }).name,
 			detectWorkbenchAppPreviewPackageManager({ hasYarnIntegrity: true, hasPackageLock: true }).name,
-		], ['pnpm', 'yarn']);
+			detectWorkbenchAppPreviewPackageManager({ hasYarnNodeModulesState: true, hasPackageLock: true }).name,
+		], ['pnpm', 'yarn', 'yarn']);
 	});
 
 	test('detects lockfiles with npm-compatible ordering', () => {
@@ -102,6 +103,33 @@ suite('AppPreviewPackageManager', () => {
 			dependencyArtifactMtime: 50,
 			lockfileMtime: 40,
 		}), 'ready');
+	});
+
+	test('dependency artifact mtime requires package-manager install markers', () => {
+		assert.deepStrictEqual([
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'npm', nodeModulesMtime: 30 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'bun', nodeModulesMtime: 30 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'yarn', nodeModulesMtime: 30 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'yarn', nodeModulesMtime: 30, yarnNodeModulesStateMtime: 31 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'yarn', yarnPnpMtime: 32 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'yarn', nodeModulesMtime: 30, yarnIntegrityMtime: 33 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'pnpm', nodeModulesMtime: 30 }),
+			resolveWorkbenchAppPreviewDependencyArtifactMtime({ packageManagerName: 'pnpm', nodeModulesMtime: 30, pnpmModulesMtime: 34 }),
+		], [30, 30, undefined, 31, 32, 33, undefined, 34]);
+	});
+
+	test('dependency readiness treats matching hash as missing when package-manager artifact is absent', () => {
+		const dependencyArtifactMtime = resolveWorkbenchAppPreviewDependencyArtifactMtime({
+			packageManagerName: 'yarn',
+			nodeModulesMtime: 30,
+		});
+
+		assert.strictEqual(resolveWorkbenchAppPreviewDependencyReadiness({
+			dependencyArtifactMtime,
+			lockfileMtime: 20,
+			lockfileHash: 'abc123',
+			installedLockfileHash: 'abc123',
+		}), 'missing');
 	});
 
 	test('dependency readiness trusts matching install hash over newer lockfile mtimes', () => {

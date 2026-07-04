@@ -12,6 +12,7 @@ export interface IWorkbenchAppPreviewPackageManagerSignals {
 	readonly yarnPath?: string;
 	readonly hasYarnRelease?: boolean;
 	readonly hasYarnIntegrity?: boolean;
+	readonly hasYarnNodeModulesState?: boolean;
 	readonly hasPnpmModulesYaml?: boolean;
 	readonly hasPackageLock?: boolean;
 	readonly hasPnpmLock?: boolean;
@@ -31,6 +32,15 @@ export interface IWorkbenchAppPreviewDependencyReadinessSignals {
 	readonly lockfileMtime?: number;
 	readonly lockfileHash?: string;
 	readonly installedLockfileHash?: string;
+}
+
+export interface IWorkbenchAppPreviewDependencyArtifactSignals {
+	readonly packageManagerName: WorkbenchAppPreviewPackageManagerName;
+	readonly nodeModulesMtime?: number;
+	readonly yarnNodeModulesStateMtime?: number;
+	readonly yarnIntegrityMtime?: number;
+	readonly yarnPnpMtime?: number;
+	readonly pnpmModulesMtime?: number;
 }
 
 export interface IWorkbenchAppPreviewInstallHashMarkerBackfillPolicy {
@@ -60,7 +70,7 @@ export function detectWorkbenchAppPreviewPackageManager(signals: IWorkbenchAppPr
 		return { name: 'pnpm', source: 'installedMarker', usesProjectYarn: false };
 	}
 
-	if (signals.hasYarnIntegrity) {
+	if (signals.hasYarnIntegrity || signals.hasYarnNodeModulesState) {
 		return { name: 'yarn', source: 'installedMarker', usesProjectYarn: false };
 	}
 
@@ -111,6 +121,18 @@ export function resolveWorkbenchAppPreviewDependencyReadiness(signals: IWorkbenc
 	return 'ready';
 }
 
+export function resolveWorkbenchAppPreviewDependencyArtifactMtime(signals: IWorkbenchAppPreviewDependencyArtifactSignals): number | undefined {
+	switch (signals.packageManagerName) {
+		case 'yarn':
+			return maxWorkbenchAppPreviewMtime(signals.yarnPnpMtime, signals.yarnNodeModulesStateMtime, signals.yarnIntegrityMtime);
+		case 'pnpm':
+			return signals.pnpmModulesMtime;
+		case 'npm':
+		case 'bun':
+			return signals.nodeModulesMtime;
+	}
+}
+
 export function shouldBackfillWorkbenchAppPreviewInstallHashMarker(policy: IWorkbenchAppPreviewInstallHashMarkerBackfillPolicy): boolean {
 	return policy.dependencyReadiness === 'ready' &&
 		policy.dependencyArtifactMtime !== undefined &&
@@ -132,6 +154,11 @@ function parseWorkbenchAppPreviewPackageManagerField(value: string | undefined):
 
 function hasWorkbenchAppPreviewProjectYarn(signals: IWorkbenchAppPreviewPackageManagerSignals): boolean {
 	return !!signals.yarnPath?.trim() || signals.hasYarnRelease === true;
+}
+
+function maxWorkbenchAppPreviewMtime(...values: (number | undefined)[]): number | undefined {
+	const mtimes = values.filter((value): value is number => typeof value === 'number');
+	return mtimes.length ? Math.max(...mtimes) : undefined;
 }
 
 function getWorkbenchAppPreviewPackageManagerExecutable(packageManager: IWorkbenchAppPreviewPackageManagerDetection, corepackAvailable: boolean): string {

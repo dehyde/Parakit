@@ -45,7 +45,7 @@ import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
 import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
-import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyArtifactMtime, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
@@ -453,12 +453,13 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'bun.lockb')),
 	);
 	const nodeModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules'));
-	const dependencyArtifactMtime = maxWorkbenchAppPreviewMtime(
-		nodeModulesMtime,
+	const yarnPnpMtime = maxWorkbenchAppPreviewMtime(
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.cjs')),
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.loader.mjs')),
-		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.yarn', 'install-state.gz')),
 	);
+	const yarnNodeModulesStateMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-state.yml'));
+	const yarnIntegrityMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-integrity'));
+	const pnpmModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.modules.yaml'));
 	const lockfileMtime = maxWorkbenchAppPreviewMtime(packageLockMtime, pnpmLockMtime, yarnLockMtime, bunLockMtime);
 	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
 	const installedLockfileHash = nodeModulesMtime !== undefined ? await readWorkbenchAppPreviewInstallHashMarker(fileService, repository) : undefined;
@@ -466,12 +467,21 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		packageManager,
 		yarnPath: parseWorkbenchAppPreviewYarnPath(yarnRc),
 		hasYarnRelease: await hasWorkbenchAppPreviewYarnRelease(fileService, repository),
-		hasYarnIntegrity: await existsWorkbenchAppPreviewPath(fileService, joinPath(repository, 'node_modules', '.yarn-integrity')),
-		hasPnpmModulesYaml: await existsWorkbenchAppPreviewPath(fileService, joinPath(repository, 'node_modules', '.modules.yaml')),
+		hasYarnIntegrity: yarnIntegrityMtime !== undefined,
+		hasYarnNodeModulesState: yarnNodeModulesStateMtime !== undefined,
+		hasPnpmModulesYaml: pnpmModulesMtime !== undefined,
 		hasPackageLock: packageLockMtime !== undefined,
 		hasPnpmLock: pnpmLockMtime !== undefined,
 		hasYarnLock: yarnLockMtime !== undefined,
 		hasBunLock: bunLockMtime !== undefined,
+	});
+	const dependencyArtifactMtime = resolveWorkbenchAppPreviewDependencyArtifactMtime({
+		packageManagerName: detection.name,
+		nodeModulesMtime,
+		yarnNodeModulesStateMtime,
+		yarnIntegrityMtime,
+		yarnPnpMtime,
+		pnpmModulesMtime,
 	});
 	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime, lockfileHash, installedLockfileHash });
 	if (shouldBackfillWorkbenchAppPreviewInstallHashMarker({ dependencyReadiness, dependencyArtifactMtime, lockfileHash, installedLockfileHash })) {
