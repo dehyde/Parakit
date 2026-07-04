@@ -295,12 +295,13 @@ export function resolveWorkbenchAppPreviewUrl(candidates: IWorkbenchAppPreviewUr
 }
 
 export function resolveWorkbenchAppPreviewPreferredUrl(candidates: IWorkbenchAppPreviewPreferredUrlCandidates): string | undefined {
+	const duplicateDiscoveredRunningServerUrl = !candidates.allowRunningServerFallback && isWorkbenchAppPreviewLoopbackUrl(candidates.runningServerUrl) && areWorkbenchAppPreviewUrlsEqual(candidates.discoveredUrl, candidates.runningServerUrl);
 	const runningServerUrl = candidates.allowRunningServerFallback ? candidates.runningServerUrl : undefined;
-	const discoveredUrl = !candidates.allowRunningServerFallback && isWorkbenchAppPreviewLoopbackUrl(candidates.runningServerUrl) && areWorkbenchAppPreviewUrlsEqual(candidates.discoveredUrl, candidates.runningServerUrl)
+	const discoveredUrl = duplicateDiscoveredRunningServerUrl
 		? undefined
 		: candidates.discoveredUrl;
 
-	return resolveWorkbenchAppPreviewUrl({
+	const resolved = resolveWorkbenchAppPreviewUrl({
 		localBranchOverride: candidates.localBranchOverride,
 		localDefaultOverride: candidates.localDefaultOverride,
 		repoBranchUrl: candidates.repoBranchUrl,
@@ -308,6 +309,8 @@ export function resolveWorkbenchAppPreviewPreferredUrl(candidates: IWorkbenchApp
 		runningServerUrl,
 		discoveredUrl,
 	});
+
+	return resolved ?? (duplicateDiscoveredRunningServerUrl ? candidates.runningServerUrl?.trim() || undefined : undefined);
 }
 
 function areWorkbenchAppPreviewUrlsEqual(first: string | undefined, second: string | undefined): boolean {

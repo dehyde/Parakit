@@ -91,7 +91,7 @@ suite('Workbench App Preview', () => {
 			runningServerUrl: 'http://127.0.0.1:15761/',
 			discoveredUrl: 'http://127.0.0.1:15761/',
 			allowRunningServerFallback: false,
-		}), undefined);
+		}), 'http://127.0.0.1:15761/');
 	});
 
 	test('preferred URL keeps advertised local canonical URL when fallback is suppressed', () => {
@@ -100,6 +100,16 @@ suite('Workbench App Preview', () => {
 			discoveredUrl: 'https://local.preview.example.test:15761/',
 			allowRunningServerFallback: false,
 		}), 'https://local.preview.example.test:15761/');
+	});
+
+	test('preferred URL keeps configured default over duplicate running server fallback', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewPreferredUrl({
+			localDefaultOverride: 'https://local.preview.example.test:3001/app/projects/abc',
+			repoDefaultUrl: 'https://local.preview.example.test:3001/',
+			runningServerUrl: 'http://127.0.0.1:15761/',
+			discoveredUrl: 'http://127.0.0.1:15761/',
+			allowRunningServerFallback: false,
+		}), 'https://local.preview.example.test:3001/app/projects/abc');
 	});
 
 	test('home targets use local overrides before canonical config', () => {
