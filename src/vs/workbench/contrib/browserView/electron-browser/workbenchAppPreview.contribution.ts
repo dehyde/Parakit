@@ -2770,7 +2770,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (waitForHealthy) {
 			this._showPreviewStartupPage(this._createPreviewStartupPageState(installCommand ? 'installingDependencies' : 'serverStarting', root, branchName, context, {
 				message: installCommand
-					? localize('appPreviewInstallPreparingMessage', "Checking and installing dependencies before starting the preview.")
+					? localize('appPreviewInstallPreparingMessage', "Checking and installing dependencies before starting the preview. A fresh install can take a few minutes.")
 					: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
 				url: resolvedServer.url,
 				healthUrl: resolvedServer.healthUrl,
@@ -2837,7 +2837,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			if (installCommand) {
 				if (waitForHealthy) {
 					this._showPreviewStartupPage(this._createPreviewStartupPageState('installingDependencies', root, branchName, context, {
-						message: localize('appPreviewInstallingDependenciesMessage', "Installing dependencies before starting the preview server."),
+						message: localize('appPreviewInstallingDependenciesMessage', "Installing dependencies before starting the preview server. A fresh install can take a few minutes."),
 						url: resolvedServer.url,
 						healthUrl: resolvedServer.healthUrl,
 						command: installCommand,

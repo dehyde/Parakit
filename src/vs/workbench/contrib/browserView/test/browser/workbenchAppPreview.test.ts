@@ -484,6 +484,16 @@ suite('Workbench App Preview', () => {
 		assert.doesNotMatch(html, /prefers-color-scheme/);
 	});
 
+	test('startup install page sets expectations for fresh dependency installs', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'installingDependencies',
+			title: 'Installing dependencies for feature/cart',
+			message: 'Installing dependencies before starting the preview server. A fresh install can take a few minutes.',
+		}));
+
+		assert.match(html, /fresh install can take a few minutes/);
+	});
+
 	test('startup page hides agent context copy before the slow state', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
