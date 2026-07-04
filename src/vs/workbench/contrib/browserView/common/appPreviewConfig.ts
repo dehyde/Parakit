@@ -119,7 +119,7 @@ export interface IWorkbenchAppPreviewLoadErrorRecoveryPolicy {
 }
 
 export type WorkbenchAppPreviewServerState = 'stopped' | 'starting' | 'running' | 'failed';
-export type WorkbenchAppPreviewHealthState = 'unknown' | 'healthy' | 'unhealthy';
+export type WorkbenchAppPreviewHealthState = 'unknown' | 'healthy' | 'reachable' | 'unhealthy';
 
 export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
 	readonly recoverableLoadError: boolean;
@@ -230,6 +230,38 @@ export function getWorkbenchAppPreviewHealthFetchMode(url: string): 'cors' | 'no
 	}
 
 	return 'cors';
+}
+
+export interface IWorkbenchAppPreviewHealthSignals {
+	/** The dev server answered an HTTP request (transport reachability). */
+	readonly httpReachable: boolean;
+	/** The preview tab is currently pointed at the dev server origin (i.e. we can see the app). */
+	readonly previewOnServerOrigin: boolean;
+	/** Whether the app actually rendered: true/false when probed, undefined when it could not be. */
+	readonly renderVerified: boolean | undefined;
+}
+
+/**
+ * Derive the reported health from independent signals so a reachable transport can never be
+ * mistaken for a rendered app (the "healthy but blank" failure):
+ * - not reachable -> `unhealthy`.
+ * - reachable but not looking at the app yet (still on the startup/blank page) -> `reachable`.
+ * - reachable and the app is confirmed rendered -> `healthy`.
+ * - reachable but the app is confirmed NOT rendered (empty root / document not complete) -> `reachable`.
+ * - reachable and render could not be determined (no probe available) -> `healthy` (fail open, so a
+ *   missing/blocked probe never regresses an otherwise working preview).
+ */
+export function resolveWorkbenchAppPreviewHealthFromSignals(signals: IWorkbenchAppPreviewHealthSignals): WorkbenchAppPreviewHealthState {
+	if (!signals.httpReachable) {
+		return 'unhealthy';
+	}
+	if (!signals.previewOnServerOrigin) {
+		return 'reachable';
+	}
+	if (signals.renderVerified === false) {
+		return 'reachable';
+	}
+	return 'healthy';
 }
 
 export function getTargetUrl(target: string | IPreviewConfigTarget | undefined): string | undefined {
@@ -917,6 +949,46 @@ export function isWorkbenchAppPreviewPathUnderRoot(candidatePath: string, rootPa
 	const candidate = normalize(candidatePath);
 	const root = normalize(rootPath);
 	return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+export interface IWorkbenchAppPreviewPortOwner {
+	readonly pid: number;
+	readonly cwd?: string;
+}
+
+export interface IWorkbenchAppPreviewFixedPortPolicy {
+	/** Whether the required port currently has nothing bound to it. */
+	readonly portFree: boolean;
+	/** The process currently listening on the port, if known. */
+	readonly owner: IWorkbenchAppPreviewPortOwner | undefined;
+	/** Absolute path of the workspace whose dev server needs the port. */
+	readonly rootPath: string;
+}
+
+/**
+ * A repo-fixed port cannot be swapped for a free one (the built HTML pins its asset URLs to it), so
+ * before launching we must make the port ours. This decides what to do about whoever holds it:
+ *
+ * - `ready` - nothing is bound; launch immediately.
+ * - `reuseRepoLocal` - a process running out of this same repo owns it (our own server tearing down,
+ *   or an independently started dev server per the .designer/dev.json no-op pattern); reuse it.
+ * - `closeForeign` - a process from a different repo is squatting on the port; close it so the
+ *   correct app can bind (opening/switching must never land on a stale/foreign server).
+ * - `waitUnknownOwner` - the port is occupied but the owner could not be identified; wait for it.
+ */
+export type WorkbenchAppPreviewFixedPortAction = 'ready' | 'reuseRepoLocal' | 'closeForeign' | 'waitUnknownOwner';
+
+export function resolveWorkbenchAppPreviewFixedPortAction(policy: IWorkbenchAppPreviewFixedPortPolicy): WorkbenchAppPreviewFixedPortAction {
+	if (policy.portFree) {
+		return 'ready';
+	}
+	if (policy.owner?.cwd && isWorkbenchAppPreviewPathUnderRoot(policy.owner.cwd, policy.rootPath)) {
+		return 'reuseRepoLocal';
+	}
+	if (policy.owner && Number.isInteger(policy.owner.pid) && policy.owner.pid > 0) {
+		return 'closeForeign';
+	}
+	return 'waitUnknownOwner';
 }
 
 export function classifyWorkbenchAppPreviewTerminalFailure(output: string, port: number | undefined): WorkbenchAppPreviewTerminalFailure {

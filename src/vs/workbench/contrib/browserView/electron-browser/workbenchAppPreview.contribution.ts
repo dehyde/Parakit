@@ -3,7 +3,7 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { disposableTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
+import { disposableTimeout, RunOnceScheduler, timeout } from '../../../../base/common/async.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { $, addDisposableListener, EventType } from '../../../../base/browser/dom.js';
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -67,10 +67,13 @@ const AGENT_LOG_INITIAL_READ_LIMIT = 64 * 1024;
 const AGENT_LOG_SCAN_DELAY = 500;
 const APP_PREVIEW_PLAYWRIGHT_SESSION_ID = 'workbench-app-preview';
 const MAX_PORT_CONFLICT_RECOVERY_ATTEMPTS = 3;
+const PREVIEW_PORT_RELEASE_TIMEOUT = 4_000;
+const PREVIEW_PORT_POLL_INTERVAL = 200;
 const MAX_BACKGROUND_HEALTH_FAILURES = 3;
 const MAX_BACKGROUND_RESTART_ATTEMPTS = 3;
 const PREVIEW_STARTUP_HEALTH_INTERVAL = 1_000;
 const PREVIEW_HEALTH_FETCH_TIMEOUT = 5_000;
+const PREVIEW_RENDER_PROBE_TIMEOUT = 2_500;
 const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
 const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
 const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
@@ -2721,6 +2724,29 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		const fixedPort = getWorkbenchAppPreviewDevConfigFixedPort(resolvedConfig);
 		const port = fixedPort ?? (requestedPort && await this._isPortAvailable(requestedPort) ? requestedPort : await this._findAvailablePort());
+
+		// A repo-fixed port is non-negotiable: the built HTML pins its asset URLs to it, so the dev
+		// server cannot be allowed to silently fall back to another port. Guarantee the port is ours
+		// before launching - auto-closing any foreign process squatting on it (e.g. an orphaned dev
+		// server from a different repo) - so opening or switching always lands on the real app
+		// instead of a stale/foreign one that happens to answer on the same port.
+		if (fixedPort !== undefined) {
+			const fixedPortReady = await this._ensureRequiredPortAvailable(fixedPort, root);
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (!fixedPortReady.ok) {
+				this._serverState = 'failed';
+				this._serverHealth = 'unhealthy';
+				this._serverMessage = fixedPortReady.message;
+				this._previewStartupInProgress = false;
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+					message: fixedPortReady.message,
+				}));
+				return this.getPreviewStatus();
+			}
+		}
+
 		const resolvedServer = applyWorkbenchAppPreviewDevPort(resolvedConfig, port);
 		const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, String(port));
 		let serverCommand = resolvedServer.command;
@@ -2869,7 +2895,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 					command: serverCommand,
 					cwd
 				}));
-				const healthy = await this._waitForPreviewHealth(PREVIEW_STARTUP_HEALTH_TIMEOUT);
+				const healthy = await this._waitForPreviewHealth(PREVIEW_STARTUP_HEALTH_TIMEOUT, isCurrentStart);
 				if (!isCurrentStart()) {
 					return this.getPreviewStatus();
 				}
@@ -3082,9 +3108,14 @@ export class WorkbenchAppPreviewController extends Disposable {
 		].filter((value): value is string => !!value).join('\n');
 	}
 
-	private async _waitForPreviewHealth(timeoutMs: number): Promise<boolean> {
+	private async _waitForPreviewHealth(timeoutMs: number, isCurrent?: () => boolean): Promise<boolean> {
 		const startedAt = Date.now();
 		while (Date.now() - startedAt < timeoutMs) {
+			// A newer start (e.g. a fast branch switch) supersedes this one - stop polling immediately
+			// instead of running to the full timeout and mutating shared health state behind it.
+			if (isCurrent && !isCurrent()) {
+				return false;
+			}
 			if (await this._checkServerHealthNow()) {
 				return true;
 			}
@@ -3170,8 +3201,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	private async _checkServerHealthCore(): Promise<void> {
-		const healthy = await this._checkServerHealthNow();
-		if (healthy) {
+		await this._checkServerHealthNow();
+		// Success requires a render-confirmed 'healthy' - not merely a reachable transport - so a
+		// server that answers HTTP while the app stays blank ('reachable') accrues failures and lets
+		// the watchdog recover it, instead of being pinned healthy forever.
+		if (this._serverHealth === 'healthy') {
 			this._consecutiveHealthFailures = 0;
 			this._backgroundRestartAttempts = 0;
 			await this._clearPreviewHealthOverlay();
@@ -3226,28 +3260,93 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (!this._serverHealthUrl || this._serverState !== 'running') {
 			return false;
 		}
+
+		const reachable = await this._probeServerReachable(this._serverHealthUrl);
+		if (!reachable) {
+			this._serverHealth = 'unhealthy';
+			return false;
+		}
+
+		// The server answered, but an HTTP 200 on an SPA only proves the shell is served - not that
+		// the app mounted. When the preview is actually pointed at the app, confirm it rendered so a
+		// blank/stale/foreign page can never be reported as healthy. Fail open when we cannot probe.
+		const previewOnServerOrigin = this._isPreviewOnServerOrigin();
+		const renderVerified = previewOnServerOrigin ? await this._probePreviewRender() : undefined;
+		this._serverHealth = resolveWorkbenchAppPreviewHealthFromSignals({ httpReachable: true, previewOnServerOrigin, renderVerified });
+		if (this._serverHealth === 'healthy') {
+			this._lastHealthError = undefined;
+		} else if (renderVerified === false) {
+			this._lastHealthError = 'The server responded but the app has not rendered yet.';
+		}
+		return reachable;
+	}
+
+	/** HTTP reachability probe for the dev server, preserving the browser fetch-mode fallbacks. */
+	private async _probeServerReachable(healthUrl: string): Promise<boolean> {
 		try {
-			const mode = getWorkbenchAppPreviewHealthFetchMode(this._serverHealthUrl);
-			const response = await this._fetchHealth(this._serverHealthUrl, { method: 'GET', cache: 'no-store', mode });
+			const mode = getWorkbenchAppPreviewHealthFetchMode(healthUrl);
+			const response = await this._fetchHealth(healthUrl, { method: 'GET', cache: 'no-store', mode });
 			if (mode === 'no-cors') {
-				this._serverHealth = 'healthy';
-				this._lastHealthError = undefined;
 				return true;
 			}
-			this._serverHealth = response.ok ? 'healthy' : 'unhealthy';
-			this._lastHealthError = response.ok ? undefined : `${response.status} ${response.statusText}`.trim();
+			if (!response.ok) {
+				this._lastHealthError = `${response.status} ${response.statusText}`.trim();
+			}
 			return response.ok;
 		} catch (error) {
 			try {
-				await this._fetchHealth(this._serverHealthUrl, { method: 'GET', cache: 'no-store', mode: 'no-cors' });
-				this._serverHealth = 'healthy';
-				this._lastHealthError = undefined;
+				await this._fetchHealth(healthUrl, { method: 'GET', cache: 'no-store', mode: 'no-cors' });
 				return true;
 			} catch {
 				this._lastHealthError = error instanceof Error ? `Health check request failed: ${error.message}` : 'Health check request failed.';
-				this._serverHealth = 'unhealthy';
 				return false;
 			}
+		}
+	}
+
+	private _isPreviewOnServerOrigin(): boolean {
+		const preview = this._preview;
+		if (!preview || preview.isDisposed() || !this._serverUrl || !preview.url) {
+			return false;
+		}
+		try {
+			return new URL(preview.url).origin === new URL(this._serverUrl).origin;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Probe the live preview page for whether the app actually rendered. Returns true/false when the
+	 * page could be inspected, or undefined when it could not (no session, timeout, cross-origin) so
+	 * callers fail open. Uses a generic signal - the document is complete and the app root has real
+	 * content - rather than any framework-specific title, so it works across dev servers.
+	 */
+	private async _probePreviewRender(): Promise<boolean | undefined> {
+		const preview = this._preview;
+		if (!preview || preview.isDisposed()) {
+			return undefined;
+		}
+		const timeoutPromise = timeout(PREVIEW_RENDER_PROBE_TIMEOUT);
+		try {
+			const probe = playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page) => page.evaluate(() => {
+				const roots = [document.getElementById('root'), document.querySelector('#app'), document.querySelector('[data-reactroot]'), document.querySelector('main'), document.body];
+				const root = roots.find(candidate => !!candidate) ?? undefined;
+				return { readyState: document.readyState, childElementCount: root ? root.childElementCount : 0 };
+			}));
+			const result = await Promise.race([
+				probe.catch(() => undefined),
+				timeoutPromise.then(() => undefined, () => undefined),
+			]);
+			if (!result) {
+				return undefined;
+			}
+			return result.readyState === 'complete' && result.childElementCount > 0;
+		} catch (error) {
+			this._logService.trace('[WorkbenchAppPreview] Preview render probe failed.', error);
+			return undefined;
+		} finally {
+			timeoutPromise.cancel();
 		}
 	}
 
@@ -3378,7 +3477,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 			maxBackgroundRestartAttempts: MAX_BACKGROUND_RESTART_ATTEMPTS,
 		})) {
 			this._consecutiveHealthFailures = 0;
-			this._serverMessage = localize('appPreviewHealthCheckWaitingLiveProcess', "Preview server is still running. Waiting for it to respond.");
+			// Distinguish "transport is down" from "server answers but the app never mounted" so the
+			// reachable-but-blank state is explained rather than presented as a silent spinner.
+			this._serverMessage = this._serverHealth === 'reachable'
+				? localize('appPreviewReachableNotRendered', "Preview server is responding but the app has not rendered yet. Waiting for it to mount.")
+				: localize('appPreviewHealthCheckWaitingLiveProcess', "Preview server is still running. Waiting for it to respond.");
 			return;
 		}
 
@@ -3601,6 +3704,92 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 	private async _isPortAvailable(port: number): Promise<boolean> {
 		return this._nativeHostService.isPortFree(port);
+	}
+
+	/**
+	 * Ensure a repo-fixed port is actually available for our dev server before we launch.
+	 *
+	 * Unlike a dynamically assigned port, a fixed port cannot be swapped for a free one - the built
+	 * HTML pins its asset URLs to it - so if something else holds it the dev server silently binds a
+	 * different port and the preview renders the wrong app (or nothing). We therefore verify who owns
+	 * the port and make it ours:
+	 * - Free -> ready.
+	 * - Held by a process running out of this repo -> reuse it (our own just-stopped server releasing
+	 *   the socket, or an independently started dev server per the .designer/dev.json no-op pattern).
+	 * - Held by a foreign process -> auto-close it (SIGTERM, then SIGKILL) and wait for release.
+	 */
+	private async _ensureRequiredPortAvailable(port: number, root: URI): Promise<{ ok: true } | { ok: false; message: string }> {
+		if (await this._isPortAvailable(port)) {
+			return { ok: true };
+		}
+
+		let owner: IWorkbenchAppPreviewPortOwner | undefined;
+		try {
+			owner = await this._nativeHostService.getPortOwner(port);
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] Could not determine the owner of required port ${port}.`, error);
+			owner = undefined;
+		}
+
+		const action = resolveWorkbenchAppPreviewFixedPortAction({ portFree: false, owner, rootPath: root.fsPath });
+		if (action === 'reuseRepoLocal') {
+			// Our own previous server tearing down, or an intentional repo-local dev server. Give a
+			// just-stopped process a moment to release the socket; if it persists we adopt it as-is.
+			await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+			return { ok: true };
+		}
+		if (action === 'closeForeign' && owner) {
+			await this._closeForeignPortOwner(port, owner);
+		} else {
+			// Occupied but the owner is unknown - best effort wait for it to clear on its own.
+			await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+		}
+
+		if (await this._isPortAvailable(port)) {
+			return { ok: true };
+		}
+
+		const who = owner
+			? `another process (pid ${owner.pid}${owner.cwd ? `, ${owner.cwd}` : ''})`
+			: 'another process';
+		return {
+			ok: false,
+			message: `Port ${port} is required by this app but is held by ${who} that could not be closed automatically. Close it and restart App Preview.`,
+		};
+	}
+
+	/**
+	 * Auto-close a foreign process squatting on a required fixed port: SIGTERM first for a graceful
+	 * exit, then SIGKILL if it does not release the socket in time. `getPortOwner` returns the actual
+	 * listener pid, so killing it frees the port even when it is a child of another launcher.
+	 */
+	private async _closeForeignPortOwner(port: number, owner: IWorkbenchAppPreviewPortOwner): Promise<void> {
+		this._logService.info(`[WorkbenchAppPreview] Required port ${port} is held by a foreign process (pid ${owner.pid}${owner.cwd ? `, cwd ${owner.cwd}` : ''}); auto-closing it so the preview can bind the correct port.`);
+		try {
+			await this._nativeHostService.killProcess(owner.pid, 'SIGTERM');
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] SIGTERM of pid ${owner.pid} failed.`, error);
+		}
+		if (await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT)) {
+			return;
+		}
+		try {
+			await this._nativeHostService.killProcess(owner.pid, 'SIGKILL');
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] SIGKILL of pid ${owner.pid} failed.`, error);
+		}
+		await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+	}
+
+	private async _waitForPortFree(port: number, timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (await this._isPortAvailable(port)) {
+				return true;
+			}
+			await timeout(PREVIEW_PORT_POLL_INTERVAL);
+		}
+		return this._isPortAvailable(port);
 	}
 
 	private _registerPreviewTools(): void {
