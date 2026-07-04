@@ -103,4 +103,36 @@ suite('AppPreviewPackageManager', () => {
 			lockfileMtime: 40,
 		}), 'ready');
 	});
+
+	test('dependency readiness trusts matching install hash over newer lockfile mtimes', () => {
+		const signals = {
+			dependencyArtifactMtime: 10,
+			lockfileMtime: 20,
+			lockfileHash: 'abc123',
+			installedLockfileHash: 'abc123',
+		};
+
+		assert.strictEqual(resolveWorkbenchAppPreviewDependencyReadiness(signals), 'ready');
+	});
+
+	test('dependency readiness marks stale when install hash differs', () => {
+		const signals = {
+			dependencyArtifactMtime: 30,
+			lockfileMtime: 20,
+			lockfileHash: 'abc123',
+			installedLockfileHash: 'def456',
+		};
+
+		assert.strictEqual(resolveWorkbenchAppPreviewDependencyReadiness(signals), 'stale');
+	});
+
+	test('dependency readiness still requires an installed artifact before trusting hashes', () => {
+		const signals = {
+			lockfileMtime: 20,
+			lockfileHash: 'abc123',
+			installedLockfileHash: 'abc123',
+		};
+
+		assert.strictEqual(resolveWorkbenchAppPreviewDependencyReadiness(signals), 'missing');
+	});
 });

@@ -29,6 +29,8 @@ export interface IWorkbenchAppPreviewPackageManagerDetection {
 export interface IWorkbenchAppPreviewDependencyReadinessSignals {
 	readonly dependencyArtifactMtime?: number;
 	readonly lockfileMtime?: number;
+	readonly lockfileHash?: string;
+	readonly installedLockfileHash?: string;
 }
 
 const PACKAGE_MANAGER_PATTERN = /^(npm|yarn|pnpm|bun)(?:@(.+))?$/;
@@ -89,6 +91,10 @@ export function resolveWorkbenchAppPreviewPackageManagerScriptCommand(packageMan
 export function resolveWorkbenchAppPreviewDependencyReadiness(signals: IWorkbenchAppPreviewDependencyReadinessSignals): WorkbenchAppPreviewDependencyReadiness {
 	if (signals.dependencyArtifactMtime === undefined) {
 		return 'missing';
+	}
+
+	if (signals.lockfileHash !== undefined && signals.installedLockfileHash !== undefined) {
+		return signals.lockfileHash === signals.installedLockfileHash ? 'ready' : 'stale';
 	}
 
 	if (signals.lockfileMtime !== undefined && signals.lockfileMtime > signals.dependencyArtifactMtime) {

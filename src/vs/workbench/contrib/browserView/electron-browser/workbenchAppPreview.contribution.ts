@@ -10,7 +10,7 @@ import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
 import { Emitter, Event } from '../../../../base/common/event.js';
-import { hash } from '../../../../base/common/hash.js';
+import { hash, hashAsync } from '../../../../base/common/hash.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
@@ -78,6 +78,16 @@ const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
 const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
 const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
 const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
+const APP_PREVIEW_INSTALL_HASH_MARKER = '.parakit-install-hash';
+const APP_PREVIEW_LOCKFILE_HASH_VERSION = 'v1';
+const APP_PREVIEW_LOCKFILE_PATHS = [
+	'package-lock.json',
+	'npm-shrinkwrap.json',
+	'pnpm-lock.yaml',
+	'yarn.lock',
+	'bun.lock',
+	'bun.lockb',
+];
 const PREVIEW_TERMINAL_READY_TIMEOUT = 10_000;
 const PREVIEW_TERMINAL_READY_ATTEMPTS = 2;
 const PREVIEW_STATIC_HTML_INDEX_DIRS = ['', 'docs', 'public', 'dist', 'build', 'site', 'out'];
@@ -363,6 +373,50 @@ async function readWorkbenchAppPreviewTextFile(fileService: IFileService, resour
 	}
 }
 
+async function readWorkbenchAppPreviewFileBase64(fileService: IFileService, resource: URI): Promise<string | undefined> {
+	try {
+		return encodeBase64((await fileService.readFile(resource)).value);
+	} catch {
+		return undefined;
+	}
+}
+
+async function computeWorkbenchAppPreviewLockfileHash(fileService: IFileService, repository: URI): Promise<string | undefined> {
+	const hashInput: string[] = [];
+
+	for (const relativePath of APP_PREVIEW_LOCKFILE_PATHS) {
+		const content = await readWorkbenchAppPreviewFileBase64(fileService, joinPath(repository, relativePath));
+		if (content !== undefined) {
+			hashInput.push(`${relativePath}\n${content}`);
+		}
+	}
+
+	if (!hashInput.length) {
+		return undefined;
+	}
+
+	return `${APP_PREVIEW_LOCKFILE_HASH_VERSION}:${await hashAsync(hashInput.join('\n'))}`;
+}
+
+async function readWorkbenchAppPreviewInstallHashMarker(fileService: IFileService, repository: URI): Promise<string | undefined> {
+	const marker = await readWorkbenchAppPreviewTextFile(fileService, joinPath(repository, 'node_modules', APP_PREVIEW_INSTALL_HASH_MARKER));
+	return marker?.trim() || undefined;
+}
+
+async function writeWorkbenchAppPreviewInstallHashMarker(fileService: IFileService, repository: URI): Promise<void> {
+	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
+	if (!lockfileHash) {
+		return;
+	}
+
+	const nodeModules = joinPath(repository, 'node_modules');
+	if (!await existsWorkbenchAppPreviewPath(fileService, nodeModules)) {
+		return;
+	}
+
+	await fileService.writeFile(joinPath(nodeModules, APP_PREVIEW_INSTALL_HASH_MARKER), VSBuffer.fromString(`${lockfileHash}\n`));
+}
+
 function maxWorkbenchAppPreviewMtime(...values: (number | undefined)[]): number | undefined {
 	const mtimes = values.filter((value): value is number => typeof value === 'number');
 	return mtimes.length ? Math.max(...mtimes) : undefined;
@@ -406,6 +460,8 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.yarn', 'install-state.gz')),
 	);
 	const lockfileMtime = maxWorkbenchAppPreviewMtime(packageLockMtime, pnpmLockMtime, yarnLockMtime, bunLockMtime);
+	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
+	const installedLockfileHash = nodeModulesMtime !== undefined ? await readWorkbenchAppPreviewInstallHashMarker(fileService, repository) : undefined;
 	const detection = detectWorkbenchAppPreviewPackageManager({
 		packageManager,
 		yarnPath: parseWorkbenchAppPreviewYarnPath(yarnRc),
@@ -417,7 +473,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		hasYarnLock: yarnLockMtime !== undefined,
 		hasBunLock: bunLockMtime !== undefined,
 	});
-	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime });
+	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime, lockfileHash, installedLockfileHash });
 	const scriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, false);
 	const corepackScriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, true);
 	const installCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, false);
@@ -2863,6 +2919,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 						cwd
 					}));
 					return this.getPreviewStatus();
+				}
+				try {
+					await writeWorkbenchAppPreviewInstallHashMarker(this._fileService, root);
+				} catch (error) {
+					this._logService.warn('[WorkbenchAppPreview] Failed to record dependency install hash.', error);
 				}
 			}
 			if (waitForHealthy) {
