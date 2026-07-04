@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommand } from '../../common/appPreviewPackageManager.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommand, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../../common/appPreviewPackageManager.js';
 
 suite('AppPreviewPackageManager', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -134,5 +134,34 @@ suite('AppPreviewPackageManager', () => {
 		};
 
 		assert.strictEqual(resolveWorkbenchAppPreviewDependencyReadiness(signals), 'missing');
+	});
+
+	test('install hash marker should be backfilled when existing dependencies are ready by mtime', () => {
+		assert.deepStrictEqual([
+			shouldBackfillWorkbenchAppPreviewInstallHashMarker({
+				dependencyReadiness: 'ready',
+				dependencyArtifactMtime: 30,
+				lockfileHash: 'abc123',
+			}),
+			shouldBackfillWorkbenchAppPreviewInstallHashMarker({
+				dependencyReadiness: 'ready',
+				dependencyArtifactMtime: 30,
+				lockfileHash: 'abc123',
+				installedLockfileHash: 'abc123',
+			}),
+			shouldBackfillWorkbenchAppPreviewInstallHashMarker({
+				dependencyReadiness: 'stale',
+				dependencyArtifactMtime: 30,
+				lockfileHash: 'abc123',
+			}),
+			shouldBackfillWorkbenchAppPreviewInstallHashMarker({
+				dependencyReadiness: 'ready',
+				lockfileHash: 'abc123',
+			}),
+			shouldBackfillWorkbenchAppPreviewInstallHashMarker({
+				dependencyReadiness: 'ready',
+				dependencyArtifactMtime: 30,
+			}),
+		], [true, false, false, false, false]);
 	});
 });

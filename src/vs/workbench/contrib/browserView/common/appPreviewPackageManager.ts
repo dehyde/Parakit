@@ -33,6 +33,13 @@ export interface IWorkbenchAppPreviewDependencyReadinessSignals {
 	readonly installedLockfileHash?: string;
 }
 
+export interface IWorkbenchAppPreviewInstallHashMarkerBackfillPolicy {
+	readonly dependencyReadiness: WorkbenchAppPreviewDependencyReadiness;
+	readonly dependencyArtifactMtime?: number;
+	readonly lockfileHash?: string;
+	readonly installedLockfileHash?: string;
+}
+
 const PACKAGE_MANAGER_PATTERN = /^(npm|yarn|pnpm|bun)(?:@(.+))?$/;
 
 export function detectWorkbenchAppPreviewPackageManager(signals: IWorkbenchAppPreviewPackageManagerSignals): IWorkbenchAppPreviewPackageManagerDetection {
@@ -102,6 +109,13 @@ export function resolveWorkbenchAppPreviewDependencyReadiness(signals: IWorkbenc
 	}
 
 	return 'ready';
+}
+
+export function shouldBackfillWorkbenchAppPreviewInstallHashMarker(policy: IWorkbenchAppPreviewInstallHashMarkerBackfillPolicy): boolean {
+	return policy.dependencyReadiness === 'ready' &&
+		policy.dependencyArtifactMtime !== undefined &&
+		policy.lockfileHash !== undefined &&
+		policy.installedLockfileHash === undefined;
 }
 
 function parseWorkbenchAppPreviewPackageManagerField(value: string | undefined): Pick<IWorkbenchAppPreviewPackageManagerDetection, 'name' | 'version'> | undefined {

@@ -45,7 +45,7 @@ import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
 import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
-import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix } from '../common/appPreviewPackageManager.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
@@ -440,7 +440,7 @@ async function hasWorkbenchAppPreviewYarnRelease(fileService: IFileService, repo
 	}
 }
 
-async function resolveHeuristicPackageManagerConfig(fileService: IFileService, repository: URI, packageManager: string | undefined) {
+async function resolveHeuristicPackageManagerConfig(fileService: IFileService, repository: URI, packageManager: string | undefined, logService?: ILogService) {
 	const yarnRc = await readWorkbenchAppPreviewTextFile(fileService, joinPath(repository, '.yarnrc.yml'));
 	const packageLockMtime = maxWorkbenchAppPreviewMtime(
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'package-lock.json')),
@@ -474,6 +474,13 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		hasBunLock: bunLockMtime !== undefined,
 	});
 	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime, lockfileHash, installedLockfileHash });
+	if (shouldBackfillWorkbenchAppPreviewInstallHashMarker({ dependencyReadiness, dependencyArtifactMtime, lockfileHash, installedLockfileHash })) {
+		try {
+			await writeWorkbenchAppPreviewInstallHashMarker(fileService, repository);
+		} catch (error) {
+			logService?.warn('[WorkbenchAppPreview] Failed to backfill dependency install hash.', error);
+		}
+	}
 	const scriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, false);
 	const corepackScriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, true);
 	const installCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, false);
@@ -501,14 +508,14 @@ function isHttpPreviewTarget(url: string | undefined): boolean {
 	}
 }
 
-async function resolveHeuristicDevConfig(fileService: IFileService, repository: URI, url?: string): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+async function resolveHeuristicDevConfig(fileService: IFileService, repository: URI, url?: string, logService?: ILogService): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
 	const env = await readPreviewEnv(fileService, repository);
 	try {
 		const content = await fileService.readFile(joinPath(repository, 'package.json'));
 		const parsed = JSON.parse(content.value.toString());
 		const scripts = typeof parsed === 'object' && parsed !== null ? (parsed as { scripts?: Record<string, unknown> }).scripts : undefined;
 		const packageManager = typeof parsed === 'object' && parsed !== null ? (parsed as { packageManager?: unknown }).packageManager : undefined;
-		const packageManagerConfig = await resolveHeuristicPackageManagerConfig(fileService, repository, typeof packageManager === 'string' ? packageManager : undefined);
+		const packageManagerConfig = await resolveHeuristicPackageManagerConfig(fileService, repository, typeof packageManager === 'string' ? packageManager : undefined, logService);
 		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env, packageManagerConfig);
 		if (npmConfig) {
 			return npmConfig;
@@ -1626,7 +1633,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		const previewConfig = await readPreviewConfig(this._fileService, root);
-		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName) ?? inferredStartupUrl);
+		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName) ?? inferredStartupUrl, this._logService);
 	}
 
 	private _resolveInferredPreviewStartupUrl(root: URI, branchName: string | undefined, port: number | undefined): string | undefined {
