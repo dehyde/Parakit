@@ -845,7 +845,9 @@ export function applyWorkbenchAppPreviewDevPort(config: IResolvedWorkbenchAppPre
 	const healthUrl = config.healthPath ? new URL(config.healthPath, url).toString() : url;
 	return {
 		command: replacePort(config.command),
-		env: config.portEnv ? { [config.portEnv]: portValue } : {},
+		// CRA, webpack, and Vite honor BROWSER=none. Rsbuild may log a benign failed launch for
+		// a browser named "none", but it still prevents the OS-level browser from opening.
+		env: { BROWSER: 'none', ...(config.portEnv ? { [config.portEnv]: portValue } : {}) },
 		url,
 		healthUrl,
 	};

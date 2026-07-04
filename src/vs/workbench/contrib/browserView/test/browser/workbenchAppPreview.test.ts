@@ -870,7 +870,7 @@ suite('Workbench App Preview', () => {
 			healthPath: '/ready',
 		}, 4321), {
 			command: 'npm run dev',
-			env: { PORT: '4321' },
+			env: { BROWSER: 'none', PORT: '4321' },
 			url: 'http://127.0.0.1:4321/',
 			healthUrl: 'http://127.0.0.1:4321/ready',
 		});
@@ -888,7 +888,7 @@ suite('Workbench App Preview', () => {
 		assert.ok(resolvedConfig);
 		assert.deepStrictEqual(applyWorkbenchAppPreviewDevPort(resolvedConfig, 4321), {
 			command: 'npm run dev',
-			env: {},
+			env: { BROWSER: 'none' },
 			url: 'https://local.preview.example.test:3001/',
 			healthUrl: 'https://local.preview.example.test:3001/',
 		});
