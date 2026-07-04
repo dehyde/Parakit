@@ -2909,6 +2909,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 					}));
 					this._previewStartupInProgress = false;
 					this._startHealthPolling();
+					// Health succeeded even if the terminal output did not advertise a URL first.
+					// Mark the managed server URL as discovered so the handoff can keep it without
+					// enabling raw running-server fallback in unrelated preferred-url calls.
+					if (this._serverUrl && (!isWorkbenchAppPreviewUrlForBranch(this._discoveredUrlBranchName, branchName) || this._discoveredUrl !== this._serverUrl)) {
+						this._discoveredUrl = this._serverUrl;
+						this._discoveredUrlBranchName = branchName;
+					}
 					const openedUrl = await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
 					this._storeSuccessfulPreviewUrl(root, branchName, openedUrl);
 				} else if (getWorkbenchAppPreviewServerStateAfterHealthTimeout({
