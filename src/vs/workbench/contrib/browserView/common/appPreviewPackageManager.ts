@@ -12,6 +12,7 @@ export interface IWorkbenchAppPreviewPackageManagerSignals {
 	readonly yarnPath?: string;
 	readonly hasYarnRelease?: boolean;
 	readonly hasYarnIntegrity?: boolean;
+	readonly hasYarnInstallState?: boolean;
 	readonly hasYarnNodeModulesState?: boolean;
 	readonly hasPnpmModulesYaml?: boolean;
 	readonly hasPackageLock?: boolean;
@@ -39,6 +40,7 @@ export interface IWorkbenchAppPreviewDependencyArtifactSignals {
 	readonly nodeModulesMtime?: number;
 	readonly yarnNodeModulesStateMtime?: number;
 	readonly yarnIntegrityMtime?: number;
+	readonly yarnInstallStateMtime?: number;
 	readonly yarnPnpMtime?: number;
 	readonly pnpmModulesMtime?: number;
 }
@@ -70,7 +72,7 @@ export function detectWorkbenchAppPreviewPackageManager(signals: IWorkbenchAppPr
 		return { name: 'pnpm', source: 'installedMarker', usesProjectYarn: false };
 	}
 
-	if (signals.hasYarnIntegrity || signals.hasYarnNodeModulesState) {
+	if (signals.hasYarnIntegrity || signals.hasYarnInstallState || signals.hasYarnNodeModulesState) {
 		return { name: 'yarn', source: 'installedMarker', usesProjectYarn: false };
 	}
 
@@ -123,8 +125,13 @@ export function resolveWorkbenchAppPreviewDependencyReadiness(signals: IWorkbenc
 
 export function resolveWorkbenchAppPreviewDependencyArtifactMtime(signals: IWorkbenchAppPreviewDependencyArtifactSignals): number | undefined {
 	switch (signals.packageManagerName) {
-		case 'yarn':
-			return maxWorkbenchAppPreviewMtime(signals.yarnPnpMtime, signals.yarnNodeModulesStateMtime, signals.yarnIntegrityMtime);
+		case 'yarn': {
+			const yarnNodeModulesMarkerMtime = maxWorkbenchAppPreviewMtime(signals.yarnNodeModulesStateMtime, signals.yarnIntegrityMtime, signals.yarnInstallStateMtime);
+			const yarnNodeModulesMtime = signals.nodeModulesMtime !== undefined && yarnNodeModulesMarkerMtime !== undefined
+				? maxWorkbenchAppPreviewMtime(signals.nodeModulesMtime, yarnNodeModulesMarkerMtime)
+				: undefined;
+			return maxWorkbenchAppPreviewMtime(signals.yarnPnpMtime, yarnNodeModulesMtime);
+		}
 		case 'pnpm':
 			return signals.pnpmModulesMtime;
 		case 'npm':

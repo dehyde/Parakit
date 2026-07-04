@@ -459,6 +459,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 	);
 	const yarnNodeModulesStateMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-state.yml'));
 	const yarnIntegrityMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-integrity'));
+	const yarnInstallStateMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.yarn', 'install-state.gz'));
 	const pnpmModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.modules.yaml'));
 	const lockfileMtime = maxWorkbenchAppPreviewMtime(packageLockMtime, pnpmLockMtime, yarnLockMtime, bunLockMtime);
 	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
@@ -468,6 +469,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		yarnPath: parseWorkbenchAppPreviewYarnPath(yarnRc),
 		hasYarnRelease: await hasWorkbenchAppPreviewYarnRelease(fileService, repository),
 		hasYarnIntegrity: yarnIntegrityMtime !== undefined,
+		hasYarnInstallState: yarnInstallStateMtime !== undefined,
 		hasYarnNodeModulesState: yarnNodeModulesStateMtime !== undefined,
 		hasPnpmModulesYaml: pnpmModulesMtime !== undefined,
 		hasPackageLock: packageLockMtime !== undefined,
@@ -480,6 +482,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		nodeModulesMtime,
 		yarnNodeModulesStateMtime,
 		yarnIntegrityMtime,
+		yarnInstallStateMtime,
 		yarnPnpMtime,
 		pnpmModulesMtime,
 	});
