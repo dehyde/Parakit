@@ -135,6 +135,12 @@ export interface IWorkbenchAppPreviewLoadEventGatePolicy {
 	readonly serverStartInFlight: boolean;
 }
 
+export interface IWorkbenchAppPreviewLoadErrorOverlayPolicy {
+	readonly previewStartupInProgress: boolean;
+	readonly errorUrl: string | undefined;
+	readonly errorCode: number;
+}
+
 export interface IWorkbenchAppPreviewServerCommandExitPolicy {
 	readonly serverState: WorkbenchAppPreviewServerState;
 	readonly serverHealth: WorkbenchAppPreviewHealthState;
@@ -340,6 +346,19 @@ export function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boole
 	}
 }
 
+function isWorkbenchAppPreviewLocalUrl(url: string | undefined): boolean {
+	if (!url) {
+		return false;
+	}
+
+	try {
+		const parsed = new URL(url);
+		return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLocalHost(parsed.hostname);
+	} catch {
+		return false;
+	}
+}
+
 function isWorkbenchAppPreviewLoopbackHost(hostname: string): boolean {
 	return LOOPBACK_PREVIEW_HOSTS.has(hostname.toLowerCase());
 }
@@ -499,7 +518,19 @@ export function shouldRecoverWorkbenchAppPreviewLoadError(policy: IWorkbenchAppP
 		return false;
 	}
 
-	return policy.errorCode === -7 || policy.errorCode === -102 || policy.errorCode === -105 || policy.errorCode === -106;
+	return isWorkbenchAppPreviewConnectionLoadErrorCode(policy.errorCode);
+}
+
+export function shouldShowWorkbenchAppPreviewLoadErrorOverlay(policy: IWorkbenchAppPreviewLoadErrorOverlayPolicy): boolean {
+	if (!policy.previewStartupInProgress) {
+		return true;
+	}
+
+	if (!isWorkbenchAppPreviewConnectionLoadErrorCode(policy.errorCode)) {
+		return true;
+	}
+
+	return !isWorkbenchAppPreviewLocalUrl(policy.errorUrl);
 }
 
 export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenchAppPreviewLoadErrorRestartPolicy): boolean {
@@ -520,6 +551,10 @@ export function shouldIgnoreWorkbenchAppPreviewLoadEvent(policy: IWorkbenchAppPr
 		|| policy.previewStartupInProgress
 		|| policy.previewLoadFailureRecoveryInFlight
 		|| policy.serverStartInFlight;
+}
+
+function isWorkbenchAppPreviewConnectionLoadErrorCode(errorCode: number): boolean {
+	return errorCode === -7 || errorCode === -102 || errorCode === -105 || errorCode === -106;
 }
 
 export function getWorkbenchAppPreviewServerStateAfterCommandExit(policy: IWorkbenchAppPreviewServerCommandExitPolicy): WorkbenchAppPreviewServerState | undefined {
