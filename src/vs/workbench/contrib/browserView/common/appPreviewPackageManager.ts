@@ -126,7 +126,7 @@ export function resolveWorkbenchAppPreviewDependencyReadiness(signals: IWorkbenc
 export function resolveWorkbenchAppPreviewDependencyArtifactMtime(signals: IWorkbenchAppPreviewDependencyArtifactSignals): number | undefined {
 	switch (signals.packageManagerName) {
 		case 'yarn': {
-			const yarnNodeModulesMarkerMtime = maxWorkbenchAppPreviewMtime(signals.yarnNodeModulesStateMtime, signals.yarnIntegrityMtime, signals.yarnInstallStateMtime);
+			const yarnNodeModulesMarkerMtime = maxWorkbenchAppPreviewMtime(signals.yarnNodeModulesStateMtime, signals.yarnIntegrityMtime);
 			const yarnNodeModulesMtime = signals.nodeModulesMtime !== undefined && yarnNodeModulesMarkerMtime !== undefined
 				? maxWorkbenchAppPreviewMtime(signals.nodeModulesMtime, yarnNodeModulesMarkerMtime)
 				: undefined;
