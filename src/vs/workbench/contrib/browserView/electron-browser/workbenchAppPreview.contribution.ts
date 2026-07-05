@@ -446,6 +446,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'package-lock.json')),
 		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'npm-shrinkwrap.json')),
 	);
+	const pnpmWorkspaceMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'pnpm-workspace.yaml'));
 	const pnpmLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'pnpm-lock.yaml'));
 	const yarnLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'yarn.lock'));
 	const bunLockMtime = maxWorkbenchAppPreviewMtime(
@@ -476,6 +477,7 @@ async function resolveHeuristicPackageManagerConfig(fileService: IFileService, r
 		hasPnpmLock: pnpmLockMtime !== undefined,
 		hasYarnLock: yarnLockMtime !== undefined,
 		hasBunLock: bunLockMtime !== undefined,
+		hasPnpmWorkspace: pnpmWorkspaceMtime !== undefined,
 	});
 	const dependencyArtifactMtime = resolveWorkbenchAppPreviewDependencyArtifactMtime({
 		packageManagerName: detection.name,

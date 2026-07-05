@@ -936,6 +936,24 @@ suite('Workbench App Preview', () => {
 		});
 	});
 
+	test('heuristic dev config prefers headless start:ci over start', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'rsbuild dev --open',
+			'start:ci': 'rsbuild dev',
+		}, undefined, undefined, {
+			scriptCommandPrefix: 'pnpm run',
+			installCommand: 'pnpm install',
+			dependencyReadiness: 'missing',
+		}), {
+			command: 'pnpm run start:ci -- --port ${PORT}',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			installCommand: 'pnpm install',
+			dependencyReadiness: 'missing',
+		});
+	});
+
 	test('heuristic dev config uses fixed app port from repo environment', () => {
 		const env = parseWorkbenchAppPreviewEnv([
 			"HOST='local.preview.example.test'",

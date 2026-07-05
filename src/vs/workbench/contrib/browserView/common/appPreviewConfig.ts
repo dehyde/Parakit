@@ -775,7 +775,7 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 		? packageManager.installCommand?.trim()
 		: undefined;
 	const corepackInstallCommand = installCommand ? packageManager?.corepackInstallCommand?.trim() : undefined;
-	for (const scriptName of ['dev', 'start', 'serve']) {
+	for (const scriptName of ['dev', 'start:ci', 'start', 'serve']) {
 		const script = scripts[scriptName];
 		if (typeof script === 'string') {
 			const fixedPort = configuredFixedPort ?? getWorkbenchAppPreviewScriptFixedPort(script);

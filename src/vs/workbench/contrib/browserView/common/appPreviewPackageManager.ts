@@ -4,7 +4,7 @@
  *--------------------------------------------------------------------------------------------*/
 
 export type WorkbenchAppPreviewPackageManagerName = 'npm' | 'yarn' | 'pnpm' | 'bun';
-export type WorkbenchAppPreviewPackageManagerSource = 'packageManager' | 'projectYarn' | 'installedMarker' | 'lockfile' | 'default';
+export type WorkbenchAppPreviewPackageManagerSource = 'packageManager' | 'projectYarn' | 'installedMarker' | 'lockfile' | 'workspace' | 'default';
 export type WorkbenchAppPreviewDependencyReadiness = 'ready' | 'missing' | 'stale';
 
 export interface IWorkbenchAppPreviewPackageManagerSignals {
@@ -19,6 +19,7 @@ export interface IWorkbenchAppPreviewPackageManagerSignals {
 	readonly hasPnpmLock?: boolean;
 	readonly hasYarnLock?: boolean;
 	readonly hasBunLock?: boolean;
+	readonly hasPnpmWorkspace?: boolean;
 }
 
 export interface IWorkbenchAppPreviewPackageManagerDetection {
@@ -90,6 +91,10 @@ export function detectWorkbenchAppPreviewPackageManager(signals: IWorkbenchAppPr
 
 	if (signals.hasBunLock) {
 		return { name: 'bun', source: 'lockfile', usesProjectYarn: false };
+	}
+
+	if (signals.hasPnpmWorkspace) {
+		return { name: 'pnpm', source: 'workspace', usesProjectYarn: false };
 	}
 
 	return { name: 'npm', source: 'default', usesProjectYarn: false };

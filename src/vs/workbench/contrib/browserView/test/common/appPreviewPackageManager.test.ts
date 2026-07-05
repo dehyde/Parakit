@@ -91,6 +91,14 @@ suite('AppPreviewPackageManager', () => {
 		], ['npm', 'pnpm', 'yarn', 'bun', 'npm']);
 	});
 
+	test('detects pnpm workspace marker before npm default', () => {
+		assert.deepStrictEqual(detectWorkbenchAppPreviewPackageManager({ hasPnpmWorkspace: true }), {
+			name: 'pnpm',
+			source: 'workspace',
+			usesProjectYarn: false,
+		});
+	});
+
 	test('dependency readiness handles missing, ready, and stale artifacts', () => {
 		assert.deepStrictEqual([
 			resolveWorkbenchAppPreviewDependencyReadiness({ lockfileMtime: 20 }),
