@@ -153,6 +153,19 @@ export interface IWorkbenchAppPreviewHealthTimeoutPolicy {
 	readonly serverCommandActive?: boolean;
 }
 
+export interface IWorkbenchAppPreviewAutoStartGatePolicy {
+	readonly previewStartupInProgress: boolean;
+	readonly previewAutoStartInFlight: boolean;
+	readonly serverState: WorkbenchAppPreviewServerState;
+}
+
+export interface IWorkbenchAppPreviewInstallOutcomePolicy {
+	readonly serverTerminalExited: boolean;
+	readonly exitCode?: number;
+}
+
+export type WorkbenchAppPreviewInstallOutcome = 'succeeded' | 'crashed' | 'failed';
+
 export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
 	readonly configuredUrl: string | undefined;
 	readonly inferredStartupUrl?: string | undefined;
@@ -579,6 +592,39 @@ export function getWorkbenchAppPreviewServerStateAfterHealthTimeout(policy: IWor
 	}
 
 	return undefined;
+}
+
+/**
+ * A background poll (branch/workspace refresh) periodically tries to auto-start the preview
+ * server whenever it looks idle. Only 'stopped' is actually idle - 'starting'/'running' are
+ * already in flight, and 'failed' must wait for the user to explicitly retry/restart from the
+ * startup page rather than being silently retried on the next poll tick. Without excluding
+ * 'failed' here, a still-installing terminal that merely looked "failed" for a moment (e.g. right
+ * after a slow-install notice) would get torn down and restarted from zero by the very next poll.
+ */
+export function shouldSkipWorkbenchAppPreviewAutoStart(policy: IWorkbenchAppPreviewAutoStartGatePolicy): boolean {
+	return policy.previewStartupInProgress
+		|| policy.previewAutoStartInFlight
+		|| policy.serverState === 'starting'
+		|| policy.serverState === 'running'
+		|| policy.serverState === 'failed';
+}
+
+/**
+ * Classifies how a dependency install ended, once it has actually ended. A merely slow install
+ * (still running) is never passed to this function - only a real terminal exit or a completed
+ * command's exit code reach here - so "slow" can never be conflated with "crashed" or "failed".
+ */
+export function resolveWorkbenchAppPreviewInstallOutcome(policy: IWorkbenchAppPreviewInstallOutcomePolicy): WorkbenchAppPreviewInstallOutcome {
+	if (policy.serverTerminalExited) {
+		return 'crashed';
+	}
+
+	if (policy.exitCode !== undefined && policy.exitCode !== 0) {
+		return 'failed';
+	}
+
+	return 'succeeded';
 }
 
 export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {

@@ -143,7 +143,7 @@ export const APP_PREVIEW_STARTUP_ANIMATION_SRC = 'data:image/svg+xml;base64,' +
 
 export const WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT = 150_000;
 
-export type WorkbenchAppPreviewStartupPhase = 'starting' | 'installingDependencies' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'missingDependencies' | 'setup' | 'emptyRepo';
+export type WorkbenchAppPreviewStartupPhase = 'starting' | 'installingDependencies' | 'installSlow' | 'serverStarting' | 'healthChecking' | 'opening' | 'slow' | 'failed' | 'missingDependencies' | 'setup' | 'emptyRepo';
 export type WorkbenchAppPreviewStartupStageStatus = 'done' | 'current' | 'pending';
 export type WorkbenchAppPreviewStartupAction = 'retry' | 'restart' | 'logs' | 'copy' | 'configure' | 'pasteRepoUrl' | 'openLocalFolder';
 
@@ -188,7 +188,7 @@ function escapeHtml(value: string | undefined): string {
 
 export function getWorkbenchAppPreviewStartupTitle(phase: WorkbenchAppPreviewStartupPhase, branchName: string | undefined): string {
 	const subject = branchName?.trim() || 'this workspace';
-	if (phase === 'slow') {
+	if (phase === 'slow' || phase === 'installSlow') {
 		return 'Preview is taking longer than expected';
 	}
 	if (phase === 'failed') {
@@ -216,18 +216,18 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 	const details = state.details?.filter(Boolean) ?? [];
 	const actions = new Set<WorkbenchAppPreviewStartupAction>();
 	for (const action of state.actions ?? []) {
-		if (action !== 'copy' || state.phase === 'slow') {
+		if (action !== 'copy' || state.phase === 'slow' || state.phase === 'installSlow') {
 			actions.add(action);
 		}
 	}
 	const agentContext = state.agentContext ?? '';
 	const stages = state.phase === 'setup' ? [] : state.stages ?? [];
-	const showActivity = !!state.command && (state.phase === 'installingDependencies' || state.phase === 'serverStarting' || state.phase === 'healthChecking' || state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies');
+	const showActivity = !!state.command && (state.phase === 'installingDependencies' || state.phase === 'installSlow' || state.phase === 'serverStarting' || state.phase === 'healthChecking' || state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies');
 	const showStages = stages.length > 0;
 	const showStageStyles = state.phase !== 'setup';
 	const showTimers = showActivity || stages.some(stage => stage.status === 'current' && !!stage.startedAt);
 	const showStageSpinner = stages.some(stage => stage.status === 'current');
-	const showStartupAnimation = state.phase !== 'emptyRepo' && state.phase !== 'setup' && state.phase !== 'slow' && state.phase !== 'failed' && state.phase !== 'missingDependencies';
+	const showStartupAnimation = state.phase !== 'emptyRepo' && state.phase !== 'setup' && state.phase !== 'slow' && state.phase !== 'installSlow' && state.phase !== 'failed' && state.phase !== 'missingDependencies';
 	const detailRows = [
 		state.branchName ? `Branch: ${state.branchName}` : undefined,
 		state.previousBranchName && state.previousBranchName !== state.branchName ? `Previous branch: ${state.previousBranchName}` : undefined,
@@ -249,7 +249,7 @@ export function createWorkbenchAppPreviewStartupDataUrl(state: IWorkbenchAppPrev
 		? '<div class="icon">+</div>'
 		: state.phase === 'setup'
 			? ''
-			: state.phase === 'slow' || state.phase === 'failed' || state.phase === 'missingDependencies'
+			: state.phase === 'slow' || state.phase === 'installSlow' || state.phase === 'failed' || state.phase === 'missingDependencies'
 				? '<div class="icon">!</div>'
 				: `<span class="startup-animation-frame"><img class="startup-animation" src="${escapeHtml(startupAnimationSrc)}" alt="" aria-hidden="true"></span>`;
 

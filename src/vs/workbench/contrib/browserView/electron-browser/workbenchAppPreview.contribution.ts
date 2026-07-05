@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewInstallOutcome, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, shouldSkipWorkbenchAppPreviewAutoStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyArtifactMtime, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -77,6 +77,11 @@ const PREVIEW_RENDER_PROBE_TIMEOUT = 2_500;
 const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
 const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
 const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
+// Once an install has been running longer than the timeout above, it is only reported as slow -
+// never killed. This interval controls how often we re-check whether it has since finished, or
+// whether this start has been superseded (e.g. by an explicit restart) or the terminal actually
+// exited, while we keep waiting for it in the background.
+const PREVIEW_DEPENDENCY_INSTALL_WATCHDOG_INTERVAL = 5_000;
 const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
 const APP_PREVIEW_INSTALL_HASH_MARKER = '.parakit-install-hash';
 const APP_PREVIEW_LOCKFILE_HASH_VERSION = 'v1';
@@ -1297,7 +1302,16 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	private async _maybeStartPreviewServerForCurrentBranch(): Promise<boolean> {
-		if (this._previewStartupInProgress || this._previewAutoStartInFlight || this._serverState === 'starting' || this._serverState === 'running') {
+		// The workspace branch poll calls ensurePreview roughly every 2 seconds, which routes here.
+		// 'failed' must be excluded alongside 'starting'/'running' - otherwise the very next poll
+		// tick after any failure (including a dependency install that is merely slow, see the
+		// installSlow handling in _doStartPreviewServer) treats the preview as idle and silently
+		// restarts it, tearing down a terminal/process that may still be alive and working.
+		if (shouldSkipWorkbenchAppPreviewAutoStart({
+			previewStartupInProgress: this._previewStartupInProgress,
+			previewAutoStartInFlight: this._previewAutoStartInFlight,
+			serverState: this._serverState,
+		})) {
 			return false;
 		}
 
@@ -1937,6 +1951,104 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		return this._runPreviewTerminalCommandWithSentinel(terminal, command, timeoutMs);
+	}
+
+	/**
+	 * Runs the dependency-install command and waits for it to actually finish, however long that
+	 * takes - unlike _runPreviewTerminalCommand, this never gives up on the wait. If it is still
+	 * running after `timeoutMs`, `onSlow` fires exactly once so the caller can tell the user
+	 * installation is taking a long time, but the underlying process is never touched and the wait
+	 * for its real result continues in the background. This is what stops a merely slow install
+	 * from ever being treated the same as a dead one (see PREVIEW_DEPENDENCY_INSTALL_TIMEOUT).
+	 */
+	private async _runPreviewDependencyInstallCommand(
+		terminal: ITerminalInstance,
+		command: string,
+		timeoutMs: number,
+		isCurrentStart: () => boolean,
+		onSlow: () => void,
+	): Promise<IPreviewTerminalCommandResult> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		const completion = commandDetection
+			? this._awaitPreviewInstallCommandDetection(terminal, command, commandDetection)
+			: this._awaitPreviewInstallCommandSentinel(terminal, command);
+
+		const initialWait = timeout(timeoutMs);
+		const finishedWithinBudget = await Promise.race([
+			completion.then(() => true, () => true),
+			initialWait.then(() => false, () => false),
+		]);
+		initialWait.cancel();
+		if (finishedWithinBudget) {
+			return completion;
+		}
+
+		onSlow();
+		return this._waitForPreviewSlowInstallOutcome(completion, isCurrentStart);
+	}
+
+	/**
+	 * Keeps waiting for an install's real result after it has already been reported as slow -
+	 * stopping only when it truly finishes, the terminal actually exits, or a newer start
+	 * supersedes this one (e.g. the user chose to restart instead of waiting).
+	 */
+	private async _waitForPreviewSlowInstallOutcome(completion: Promise<IPreviewTerminalCommandResult>, isCurrentStart: () => boolean): Promise<IPreviewTerminalCommandResult> {
+		while (true) {
+			const watchdog = timeout(PREVIEW_DEPENDENCY_INSTALL_WATCHDOG_INTERVAL);
+			const finished = await Promise.race([
+				completion.then(() => true, () => true),
+				watchdog.then(() => false, () => false),
+			]);
+			watchdog.cancel();
+			if (finished) {
+				return completion;
+			}
+			if (!isCurrentStart() || this._serverTerminalExited) {
+				return { output: this._serverRecentOutput, timedOut: true };
+			}
+		}
+	}
+
+	private _awaitPreviewInstallCommandDetection(terminal: ITerminalInstance, command: string, commandDetection: ICommandDetectionCapability): Promise<IPreviewTerminalCommandResult> {
+		const commandId = `app-preview-install-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const finish = (terminalCommand: ITerminalCommand) => {
+				if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+					return;
+				}
+
+				store.dispose();
+				resolve({
+					exitCode: terminalCommand.exitCode,
+					output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+				});
+			};
+			store.add(commandDetection.onCommandFinished(finish));
+			store.add(commandDetection.onCommandInvalidated(commands => {
+				for (const terminalCommand of commands) {
+					finish(terminalCommand);
+				}
+			}));
+			void terminal.runCommand(command, true, commandId, true).catch(error => {
+				store.dispose();
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private _awaitPreviewInstallCommandSentinel(terminal: ITerminalInstance, command: string): Promise<IPreviewTerminalCommandResult> {
+		const sentinel = `__APP_PREVIEW_COMMAND_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+		const sentinelCommand = `${command}; echo ${sentinel}:$?`;
+		return new Promise(resolve => {
+			this._serverTerminalSentinel = { value: sentinel, resolve };
+			void terminal.sendText(sentinelCommand, true, true).catch(error => {
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
 	}
 
 	private async _waitForPreviewServerTerminalReady(terminal: ITerminalInstance): Promise<boolean> {
@@ -2927,15 +3039,35 @@ export class WorkbenchAppPreviewController extends Disposable {
 						cwd
 					}));
 				}
-				const installResult = await this._runPreviewTerminalCommand(terminal, installCommand, PREVIEW_DEPENDENCY_INSTALL_TIMEOUT, true);
+				const installResult = await this._runPreviewDependencyInstallCommand(terminal, installCommand, PREVIEW_DEPENDENCY_INSTALL_TIMEOUT, isCurrentStart, () => {
+					// Slow, not dead: the install is still running in this same terminal and is left
+					// completely alone. Tell the user and let them choose to keep waiting (do nothing)
+					// or restart - we never decide that for them, and _serverState deliberately stays
+					// 'starting' so the workspace branch poll can't mistake this for idle and restart it.
+					if (!isCurrentStart()) {
+						return;
+					}
+					this._serverMessage = localize('appPreviewInstallSlowMessage', "Dependency install is taking longer than expected.");
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('installSlow', root, branchName, context, {
+						message: this._serverMessage,
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+				});
 				if (!isCurrentStart()) {
 					return this.getPreviewStatus();
 				}
-				if (installResult.timedOut || (installResult.exitCode !== undefined && installResult.exitCode !== 0)) {
+				const installOutcome = resolveWorkbenchAppPreviewInstallOutcome({
+					serverTerminalExited: this._serverTerminalExited,
+					exitCode: installResult.exitCode,
+				});
+				if (installOutcome !== 'succeeded') {
 					this._serverState = 'failed';
 					this._serverHealth = 'unknown';
-					this._serverMessage = this._formatPreviewTerminalFailureMessage(installResult.output ?? this._serverRecentOutput, installResult.timedOut
-						? localize('appPreviewInstallTimedOutMessage', "Dependency install timed out before the preview server could start.")
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(installResult.output ?? this._serverRecentOutput, installOutcome === 'crashed'
+						? localize('appPreviewInstallTerminalExitedMessage', "Preview terminal exited before dependency install finished.")
 						: localize('appPreviewInstallFailedMessage', "Dependency install failed before the preview server could start."));
 					this._previewStartupInProgress = false;
 					this._showPreviewStartupPage(this._createPreviewStartupPageState('missingDependencies', root, branchName, context, {
@@ -3107,7 +3239,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		];
 		const currentIndex = phase === 'starting'
 			? 0
-			: phase === 'installingDependencies'
+			: phase === 'installingDependencies' || phase === 'installSlow'
 				? 1
 				: phase === 'serverStarting'
 					? 2
@@ -3158,6 +3290,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		const details = [
 			phase === 'starting' ? localize('appPreviewStartingDetails', "Switching branches is complete. The preview server is being prepared.") : undefined,
 			phase === 'installingDependencies' ? localize('appPreviewInstallingDependenciesDetails', "Dependencies are being installed before the server starts.") : undefined,
+			phase === 'installSlow' ? localize('appPreviewInstallSlowHint', "The install is still running in the background and has not been touched. Keep waiting, or restart if you'd rather start over.") : undefined,
 			phase === 'serverStarting' ? localize('appPreviewServerInitializing', "Server is initializing.") : undefined,
 			phase === 'healthChecking' ? localize('appPreviewHealthCheckWaiting', "Health check is waiting for the app to respond.") : undefined,
 			phase === 'slow' ? localize('appPreviewSlowHint', "The server may still be compiling or waiting on a dependency.") : undefined,
@@ -3165,7 +3298,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			phase === 'failed' ? localize('appPreviewFailedHint', "Check the terminal logs or restart the preview server.") : undefined,
 			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a default URL.") : undefined,
 		].filter((value): value is string => !!value);
-		const actions: IPreviewStartupPageState['actions'] = phase === 'slow'
+		const actions: IPreviewStartupPageState['actions'] = phase === 'slow' || phase === 'installSlow'
 			? ['retry', 'restart', 'logs', 'copy']
 			: phase === 'setup'
 				? ['configure']
