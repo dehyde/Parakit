@@ -9,16 +9,22 @@ import { mainWindow } from '../../../../base/browser/window.js';
 import { getErrorMessage } from '../../../../base/common/errors.js';
 import { DisposableStore } from '../../../../base/common/lifecycle.js';
 import { FileAccess } from '../../../../base/common/network.js';
+import { isWindows } from '../../../../base/common/platform.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IFileService } from '../../../../platform/files/common/files.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INotificationService } from '../../../../platform/notification/common/notification.js';
+import { IWorkspaceContextService, WorkbenchState } from '../../../../platform/workspace/common/workspace.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+import { clearDesignerStartupRestorePending, isDesignerManagedRepoAllowed, markDesignerStartupRestorePending, readDesignerState, writeDesignerState } from '../../../services/workspaces/common/designerManagedRepos.js';
 import { AddDesignerRepoSourceCommandId, CheckoutDesignerBranchCommandId, DesignerAddRepoChoice, GetDesignerBranchesStateCommandId, GetDesignerReposStateCommandId, shouldShowDesignerEmptyRepoFtux, shouldShowDesignerStartupRepoPicker, ShowDesignerAddRepoCommandId, SwitchDesignerRepoCommandId, type DesignerBranchCheckoutResult, type DesignerBranchItem, type DesignerBranchState, type DesignerBranchTreeNode, type DesignerRepoItem, type DesignerRepoState, type DesignerRepoSwitchResult } from '../../../services/workspaces/common/designerRepoCommands.js';
+import { IWorkspaceEditingService } from '../../../services/workspaces/common/workspaceEditing.js';
 
 export type DesignerAddRepoDialogResult =
 	| { readonly source: string }
@@ -52,6 +58,8 @@ export interface IDesignerStartupRepoPickerServices {
 		error(error: unknown): void;
 	};
 }
+
+const DesignerStartupRestorePendingMaxAgeMs = 2 * 60 * 1000;
 
 export async function showDesignerAddRepo(services: IDesignerAddRepoServices, options?: DesignerAddRepoOptions | DesignerAddRepoChoice): Promise<boolean> {
 	const normalizedOptions = normalizeDesignerAddRepoOptions(options);
@@ -627,7 +635,11 @@ class DesignerEmptyRepoFtuxContribution {
 	constructor(
 		@ICommandService private readonly commandService: ICommandService,
 		@ILogService private readonly logService: ILogService,
-		@INotificationService private readonly notificationService: INotificationService
+		@INotificationService private readonly notificationService: INotificationService,
+		@IFileService private readonly fileService: IFileService,
+		@IWorkbenchEnvironmentService private readonly environmentService: IWorkbenchEnvironmentService,
+		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
+		@IWorkspaceEditingService private readonly workspaceEditingService: IWorkspaceEditingService
 	) {
 		void this.maybeShowStartupModal();
 	}
@@ -636,6 +648,13 @@ class DesignerEmptyRepoFtuxContribution {
 		if (this.startupModalSnoozed) {
 			return;
 		}
+
+		if (await this.maybeOpenLastActiveDesignerRepo()) {
+			this.startupModalSnoozed = true;
+			return;
+		}
+
+		await this.maybeRestoreStartupBranch();
 
 		let repoState: DesignerRepoState | undefined;
 		try {
@@ -658,6 +677,79 @@ class DesignerEmptyRepoFtuxContribution {
 		this.startupModalSnoozed = true;
 		await this.commandService.executeCommand(ShowDesignerAddRepoCommandId);
 	}
+
+	private async maybeOpenLastActiveDesignerRepo(): Promise<boolean> {
+		if (this.workspaceContextService.getWorkbenchState() !== WorkbenchState.EMPTY) {
+			return false;
+		}
+
+		const nativeEnvironment = this.environmentService as IWorkbenchEnvironmentService & { readonly userHome?: URI; readonly appRoot?: string };
+		if (!nativeEnvironment.userHome) {
+			return false;
+		}
+
+		const state = await readDesignerState(this.fileService, nativeEnvironment.userHome);
+		const repoPath = state.lastActiveRepoPath;
+		if (!repoPath || !isDesignerManagedRepoAllowed(repoPath, nativeEnvironment.appRoot)) {
+			return false;
+		}
+
+		const repoUri = URI.file(repoPath);
+		if (!await this.fileService.exists(repoUri)) {
+			return false;
+		}
+
+		await writeDesignerState(this.fileService, nativeEnvironment.userHome, markDesignerStartupRestorePending(state));
+		await this.workspaceEditingService.addFolders([{ uri: repoUri }], true);
+		return true;
+	}
+
+	private async maybeRestoreStartupBranch(): Promise<void> {
+		const nativeEnvironment = this.environmentService as IWorkbenchEnvironmentService & { readonly userHome?: URI };
+		if (!nativeEnvironment.userHome) {
+			return;
+		}
+
+		const state = await readDesignerState(this.fileService, nativeEnvironment.userHome);
+		const pendingRestore = state.pendingStartupRestore;
+		if (!pendingRestore) {
+			return;
+		}
+
+		const isExpired = Date.now() - pendingRestore.createdAt > DesignerStartupRestorePendingMaxAgeMs;
+		const workspaceRoot = this.workspaceContextService.getWorkspace().folders[0]?.uri.fsPath;
+		const isCurrentWorkspace = workspaceRoot && pathsEqual(workspaceRoot, pendingRestore.repoPath);
+		if (isExpired || !isCurrentWorkspace) {
+			await writeDesignerState(this.fileService, nativeEnvironment.userHome, clearDesignerStartupRestorePending(state));
+			return;
+		}
+
+		try {
+			if (pendingRestore.branchName) {
+				const branchState = await this.commandService.executeCommand<DesignerBranchState>(GetDesignerBranchesStateCommandId, { updateRemotes: true });
+				if (branchState?.currentBranch !== pendingRestore.branchName) {
+					const checkoutResult = await this.commandService.executeCommand<DesignerBranchCheckoutResult>(CheckoutDesignerBranchCommandId, { branchName: pendingRestore.branchName, skipSave: true });
+					if (checkoutResult?.blocked) {
+						this.logService.warn(`[ParakitEmptyRepoFtux] Could not restore startup branch ${pendingRestore.branchName}: ${checkoutResult.blocked.message}`);
+					}
+				}
+			}
+		} catch (error) {
+			this.logService.warn('[ParakitEmptyRepoFtux] Could not restore startup branch.', error);
+		} finally {
+			await writeDesignerState(this.fileService, nativeEnvironment.userHome, clearDesignerStartupRestorePending(state));
+		}
+	}
+}
+
+function pathsEqual(first: string, second: string): boolean {
+	const normalizedFirst = normalizePath(first);
+	const normalizedSecond = normalizePath(second);
+	return isWindows ? normalizedFirst.toLowerCase() === normalizedSecond.toLowerCase() : normalizedFirst === normalizedSecond;
+}
+
+function normalizePath(value: string): string {
+	return value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
 }
 
 registerAction2(class extends Action2 {

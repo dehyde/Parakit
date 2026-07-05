@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { addAppPreviewScenarioChoice, addAppPreviewScenarioControl, addAppPreviewScenarioGroup, createAppPreviewScenarioBridgePayload, createAppPreviewScenarioChatContext, createDefaultAppPreviewScenarioConfig, getAppPreviewScenarioDefaultValues, getAppPreviewScenarioStorageKey, getStarterAppPreviewScenarioGroups, isAppPreviewScenarioDesignOnlyFilePath, moveAppPreviewScenarioControl, normalizeAppPreviewScenarioState, parseAppPreviewScenarioConfig, removeAppPreviewScenarioChoice, removeAppPreviewScenarioControl, removeAppPreviewScenarioGroup, summarizeAppPreviewScenarioState, updateAppPreviewScenarioChoiceLabel } from '../../common/appPreviewScenario.js';
+import { addAppPreviewScenarioChoice, addAppPreviewScenarioControl, addAppPreviewScenarioGroup, createAppPreviewScenarioBridgePayload, createAppPreviewScenarioChatContext, createAppPreviewScenarioImplementationSignature, createDefaultAppPreviewScenarioConfig, getAppPreviewScenarioDefaultValues, getAppPreviewScenarioImplementationFiles, getAppPreviewScenarioStorageKey, getStarterAppPreviewScenarioGroups, isAppPreviewScenarioDesignOnlyFilePath, moveAppPreviewScenarioControl, normalizeAppPreviewScenarioState, parseAppPreviewScenarioConfig, removeAppPreviewScenarioChoice, removeAppPreviewScenarioControl, removeAppPreviewScenarioGroup, summarizeAppPreviewScenarioState, updateAppPreviewScenarioChoiceLabel } from '../../common/appPreviewScenario.js';
 
 suite('App Preview Scenario', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
@@ -14,15 +14,15 @@ suite('App Preview Scenario', () => {
 		const groups = getStarterAppPreviewScenarioGroups();
 		const defaults = getAppPreviewScenarioDefaultValues(groups);
 
-		assert.deepStrictEqual(groups.map(group => group.label), ['Permissions', 'UI State', 'Content Stress', 'Concept Variant']);
-		assert.deepStrictEqual(groups[0].controls.map(control => control.label), ['Role']);
-		assert.deepStrictEqual(groups[2].controls.map(control => control.label), ['Length']);
+		assert.deepStrictEqual(groups.map(group => group.label), ['Alternative', 'Permissions', 'UI State', 'Content Stress']);
+		assert.deepStrictEqual(groups[0].controls.map(control => control.label), ['Alternative']);
+		assert.deepStrictEqual(groups[3].controls.map(control => control.label), ['Length']);
 		assert.strictEqual(defaults['permissions.role'], 'member');
 		assert.strictEqual(defaults['permissions.billing'], undefined);
 		assert.strictEqual(defaults['ui.error'], false);
 		assert.strictEqual(defaults['content.length'], 'normal');
 		assert.strictEqual(defaults['content.overflow'], undefined);
-		assert.strictEqual(defaults['concept.variant'], 'a');
+		assert.deepStrictEqual(defaults['alternative.variant'], 'alt-1');
 
 		const config = createDefaultAppPreviewScenarioConfig(groups);
 		assert.deepStrictEqual(config.defaultValues, defaults);
@@ -138,13 +138,15 @@ suite('App Preview Scenario', () => {
 		assert.strictEqual(config.defaultValues['ui.disabled'], false);
 		assert.strictEqual(config.defaultValues['ui.variant'], 'option-1');
 		assert.strictEqual(config.defaultValues['concept-variant.variant'], undefined);
+		config = moveAppPreviewScenarioControl(config, 'ui', 'variant', 'ui', 'disabled');
+		assert.deepStrictEqual(config.groups[0].controls.map(control => control.id), ['variant', 'disabled']);
 
 		config = updateAppPreviewScenarioChoiceLabel(config, 'ui', 'variant', 'option-1', 'A');
 		assert.strictEqual(summarizeAppPreviewScenarioState(config, { 'ui.variant': 'b' }), 'Variant: B');
 		assert.strictEqual(summarizeAppPreviewScenarioState(config, { 'ui.variant': 'option-1' }), 'Default');
 
 		config = removeAppPreviewScenarioChoice(config, 'ui', 'variant', 'b');
-		assert.deepStrictEqual(config.groups[0].controls[1], {
+		assert.deepStrictEqual(config.groups[0].controls[0], {
 			id: 'variant',
 			label: 'Variant',
 			type: 'choice',
@@ -255,5 +257,54 @@ suite('App Preview Scenario', () => {
 		assert.strictEqual(isAppPreviewScenarioDesignOnlyFilePath('../scenarioSupport.ts'), false);
 		assert.strictEqual(isAppPreviewScenarioDesignOnlyFilePath('src/../scenarioSupport.ts'), false);
 		assert.strictEqual(isAppPreviewScenarioDesignOnlyFilePath('https://example.com/file.ts'), false);
+	});
+
+	test('creates stable implementation signatures from safe design-only file states', () => {
+		const config = {
+			...createDefaultAppPreviewScenarioConfig(),
+			implementation: {
+				designOnlyFiles: [
+					{ path: 'src/design/scenarioSupport.ts', sha256: 'declared-hash' }
+				]
+			}
+		};
+		const files = [{ path: 'src/design/scenarioSupport.ts', sha256: 'actual-hash', exists: true }];
+
+		assert.strictEqual(
+			createAppPreviewScenarioImplementationSignature(config, files),
+			createAppPreviewScenarioImplementationSignature(config, files)
+		);
+	});
+
+	test('changes implementation signature when safe design-only file content changes or disappears', () => {
+		const config = {
+			...createDefaultAppPreviewScenarioConfig(),
+			implementation: {
+				designOnlyFiles: [
+					{ path: 'src/design/scenarioSupport.ts', sha256: 'declared-hash' }
+				]
+			}
+		};
+		const original = createAppPreviewScenarioImplementationSignature(config, [{ path: 'src/design/scenarioSupport.ts', sha256: 'actual-hash', exists: true }]);
+		const changed = createAppPreviewScenarioImplementationSignature(config, [{ path: 'src/design/scenarioSupport.ts', sha256: 'changed-hash', exists: true }]);
+		const missing = createAppPreviewScenarioImplementationSignature(config, [{ path: 'src/design/scenarioSupport.ts', sha256: undefined, exists: false }]);
+
+		assert.notStrictEqual(changed, original);
+		assert.notStrictEqual(missing, original);
+	});
+
+	test('ignores unsafe implementation file paths before reading file state', () => {
+		const config = {
+			...createDefaultAppPreviewScenarioConfig(),
+			implementation: {
+				designOnlyFiles: [
+					{ path: 'src/design/scenarioSupport.ts', sha256: 'safe' },
+					{ path: '../outside.ts', sha256: 'unsafe' },
+					{ path: '/tmp/outside.ts', sha256: 'also-unsafe' }
+				]
+			}
+		};
+
+		assert.deepStrictEqual(getAppPreviewScenarioImplementationFiles(config).map(file => file.path), ['src/design/scenarioSupport.ts']);
 	});
 });

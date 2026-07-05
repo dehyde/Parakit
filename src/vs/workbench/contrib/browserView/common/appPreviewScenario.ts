@@ -49,6 +49,12 @@ export interface IAppPreviewScenarioGeneratedFile {
 	readonly sha256: string;
 }
 
+export interface IAppPreviewScenarioImplementationFileState {
+	readonly path: string;
+	readonly sha256: string | undefined;
+	readonly exists: boolean;
+}
+
 export interface IAppPreviewScenarioImplementation {
 	readonly designOnlyFiles?: readonly IAppPreviewScenarioGeneratedFile[];
 }
@@ -115,6 +121,22 @@ export interface ICreateAppPreviewScenarioChatContextOptions {
 export function getStarterAppPreviewScenarioGroups(): IAppPreviewScenarioGroup[] {
 	return [
 		{
+			id: 'alternative',
+			label: 'Alternative',
+			controls: [
+				{
+					id: 'variant',
+					label: 'Alternative',
+					type: 'choice',
+					choices: [
+						{ id: 'alt-1', label: 'Alt 1' },
+						{ id: 'alt-2', label: 'Alt 2' },
+						{ id: 'alt-3', label: 'Alt 3' },
+					]
+				},
+			]
+		},
+		{
 			id: 'permissions',
 			label: 'Permissions',
 			controls: [
@@ -136,6 +158,7 @@ export function getStarterAppPreviewScenarioGroups(): IAppPreviewScenarioGroup[]
 			label: 'UI State',
 			controls: [
 				{ id: 'active', label: 'Active', type: 'toggle' },
+				{ id: 'empty', label: 'Empty', type: 'toggle' },
 				{ id: 'disabled', label: 'Disabled', type: 'toggle' },
 				{ id: 'error', label: 'Error', type: 'toggle' },
 				{ id: 'loading', label: 'Loading', type: 'toggle' },
@@ -153,22 +176,6 @@ export function getStarterAppPreviewScenarioGroups(): IAppPreviewScenarioGroup[]
 						{ id: 'normal', label: 'Normal' },
 						{ id: 'long', label: 'Long' },
 						{ id: 'empty', label: 'Empty' },
-					]
-				},
-			]
-		},
-		{
-			id: 'concept',
-			label: 'Concept Variant',
-			controls: [
-				{
-					id: 'variant',
-					label: 'Variant',
-					type: 'choice',
-					choices: [
-						{ id: 'a', label: 'A' },
-						{ id: 'b', label: 'B' },
-						{ id: 'c', label: 'C' },
 					]
 				},
 			]
@@ -205,6 +212,24 @@ export function createDefaultAppPreviewScenarioConfig(groups: readonly IAppPrevi
 		groups: cloneScenarioGroups(groups),
 		defaultValues: getAppPreviewScenarioDefaultValues(groups)
 	};
+}
+
+export function getAppPreviewScenarioImplementationFiles(config: IAppPreviewScenarioConfig): readonly IAppPreviewScenarioGeneratedFile[] {
+	return (config.implementation?.designOnlyFiles ?? [])
+		.filter(file => isAppPreviewScenarioDesignOnlyFilePath(file.path))
+		.map(file => ({ path: file.path, sha256: file.sha256 }));
+}
+
+export function createAppPreviewScenarioImplementationSignature(config: IAppPreviewScenarioConfig, fileStates: readonly IAppPreviewScenarioImplementationFileState[]): string {
+	const safeFileStates = fileStates
+		.filter(file => isAppPreviewScenarioDesignOnlyFilePath(file.path))
+		.map(file => ({ path: file.path, sha256: file.sha256, exists: file.exists }))
+		.sort((a, b) => a.path.localeCompare(b.path));
+
+	return JSON.stringify({
+		config,
+		files: safeFileStates
+	});
 }
 
 export function getAppPreviewScenarioStorageKey(repositoryKey: string, branchName: string | undefined, tabId: string): string {
@@ -508,11 +533,23 @@ export function updateAppPreviewScenarioChoiceLabel(config: IAppPreviewScenarioC
 	return withScenarioGroups(config, groups);
 }
 
-export function moveAppPreviewScenarioControl(config: IAppPreviewScenarioConfig, sourceGroupId: string, controlId: string, targetGroupId: string): IAppPreviewScenarioConfig {
-	if (sourceGroupId === targetGroupId) {
+export function updateAppPreviewScenarioControlLabel(config: IAppPreviewScenarioConfig, groupId: string, controlId: string, label: string): IAppPreviewScenarioConfig {
+	const nextLabel = label.trim();
+	if (!nextLabel) {
 		return config;
 	}
 
+	const groups = cloneScenarioGroups(config.groups);
+	const control = findScenarioControl(groups, groupId, controlId);
+	if (!control || control.label === nextLabel) {
+		return config;
+	}
+
+	control.label = nextLabel;
+	return withScenarioGroups(config, groups);
+}
+
+export function moveAppPreviewScenarioControl(config: IAppPreviewScenarioConfig, sourceGroupId: string, controlId: string, targetGroupId: string, targetControlId: string | undefined = undefined): IAppPreviewScenarioConfig {
 	const groups = cloneScenarioGroups(config.groups);
 	const sourceGroup = groups.find(group => group.id === sourceGroupId);
 	const targetGroup = groups.find(group => group.id === targetGroupId);
@@ -523,6 +560,27 @@ export function moveAppPreviewScenarioControl(config: IAppPreviewScenarioConfig,
 	const control = sourceGroup.controls.find(control => control.id === controlId);
 	if (!control) {
 		return config;
+	}
+
+	if (sourceGroupId === targetGroupId) {
+		if (!targetControlId || targetControlId === controlId) {
+			return config;
+		}
+
+		const targetIndex = targetGroup.controls.findIndex(control => control.id === targetControlId);
+		if (targetIndex < 0) {
+			return config;
+		}
+
+		const sourceIndex = sourceGroup.controls.findIndex(control => control.id === controlId);
+		const nextControls = [...sourceGroup.controls.filter(control => control.id !== controlId)];
+		const movedControl = nextControls.length >= targetIndex
+			? cloneScenarioControl(control)
+			: cloneScenarioControl(control);
+		const insertIndex = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex;
+		nextControls.splice(insertIndex, 0, movedControl);
+		sourceGroup.controls = nextControls;
+		return withScenarioGroups(config, groups);
 	}
 
 	sourceGroup.controls = sourceGroup.controls.filter(control => control.id !== controlId);

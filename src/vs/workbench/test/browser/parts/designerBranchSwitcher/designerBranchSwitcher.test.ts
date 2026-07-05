@@ -457,7 +457,7 @@ suite('DesignerBranchSwitcher', () => {
 		assert.deepStrictEqual(commandService.checkoutWithoutSavingRequests, ['main']);
 	});
 
-	test('repo switch uses save-first command and shows immediate save state', async () => {
+	test('repo switch uses direct switch command and shows immediate switch state', async () => {
 		const parent = document.createElement('div');
 		disposables.add({ dispose: () => parent.remove() });
 		document.body.appendChild(parent);
@@ -476,7 +476,8 @@ suite('DesignerBranchSwitcher', () => {
 
 		assert.strictEqual(getVisibleDropdown(), undefined);
 		assert.strictEqual(parent.querySelector('.designer-branch-switcher__repo-button')?.textContent?.includes('Switching to Other Repo'), true);
-		assert.deepStrictEqual(commandService.saveAndSwitchRequests, ['/workspace/other-repo']);
+		assert.deepStrictEqual(commandService.switchRequests, [{ repoPath: '/workspace/other-repo', skipSave: true }]);
+		assert.deepStrictEqual(commandService.saveAndSwitchRequests, []);
 
 		commandService.resolveSwitch();
 		await timeout(0);
@@ -1086,6 +1087,7 @@ class UnsafeHostBranchSwitchCommandService extends SlowBranchSwitchCommandServic
 class SlowRepoSwitchCommandService extends DesignerSwitcherCommandService {
 
 	readonly saveAndSwitchRequests: string[] = [];
+	readonly switchRequests: { repoPath: string; skipSave: boolean | undefined }[] = [];
 	private switchResolver: (() => void) | undefined;
 
 	resolveSwitch(): void {
@@ -1100,6 +1102,25 @@ class SlowRepoSwitchCommandService extends DesignerSwitcherCommandService {
 					{ name: 'VSCode Fork', path: '/workspace/vscode-fork', status: 'ready', isCurrent: true },
 					{ name: 'Other Repo', path: '/workspace/other-repo', status: 'ready', isCurrent: false },
 				]
+			} as T;
+		}
+
+		if (commandId === '_designerRepos.switch') {
+			const request = args[0] as { repoPath: string; skipSave?: boolean };
+			this.switchRequests.push({ repoPath: request.repoPath, skipSave: request.skipSave });
+			await new Promise<void>(resolve => this.switchResolver = resolve);
+			return {
+				state: {
+					currentRepoPath: request.repoPath,
+					repos: [
+						{ name: 'VSCode Fork', path: '/workspace/vscode-fork', status: 'ready', isCurrent: false },
+						{ name: 'Other Repo', path: '/workspace/other-repo', status: 'ready', isCurrent: true },
+					]
+				},
+				sync: {
+					state: 'synced',
+					targetRepoPath: request.repoPath
+				}
 			} as T;
 		}
 

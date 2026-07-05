@@ -10,11 +10,11 @@ import { DisposableStore, toDisposable } from '../../../../../base/common/lifecy
 import { ThemeIcon } from '../../../../../base/common/themables.js';
 import { localize } from '../../../../../nls.js';
 import { BrowserViewKind } from '../../../../../platform/browserView/common/browserView.js';
-import { addAppPreviewScenarioChoice, addAppPreviewScenarioControl, addAppPreviewScenarioGroup, AppPreviewScenarioControlValue, AppPreviewScenarioEditableControlType, AppPreviewScenarioSupportStatus, areAppPreviewScenarioValuesEqual, getAppPreviewScenarioControlKey, IAppPreviewScenarioConfig, moveAppPreviewScenarioControl, removeAppPreviewScenarioChoice, removeAppPreviewScenarioControl, removeAppPreviewScenarioGroup, summarizeAppPreviewScenarioState } from '../../common/appPreviewScenario.js';
+import { addAppPreviewScenarioChoice, addAppPreviewScenarioControl, addAppPreviewScenarioGroup, AppPreviewScenarioControlValue, AppPreviewScenarioEditableControlType, AppPreviewScenarioSupportStatus, areAppPreviewScenarioValuesEqual, getAppPreviewScenarioControlKey, IAppPreviewScenarioConfig, IAppPreviewScenarioGroup, moveAppPreviewScenarioControl, removeAppPreviewScenarioChoice, removeAppPreviewScenarioControl, removeAppPreviewScenarioGroup, summarizeAppPreviewScenarioState, updateAppPreviewScenarioChoiceLabel, updateAppPreviewScenarioControlLabel } from '../../common/appPreviewScenario.js';
 import { IAppPreviewScenarioService } from '../../common/appPreviewScenarioService.js';
 import { IBrowserViewModel } from '../../common/browserView.js';
 import { BrowserEditor, BrowserEditorContribution, BrowserWidgetLocation, IBrowserEditorWidget } from '../browserEditor.js';
-import { IScenarioPanelPosition, positionScenarioPanelAt, positionScenarioPanelDropdown, updateScenarioPanelDropdownHost } from './browserEditorScenarioPanel.js';
+import { closeScenarioGroupMenuSurface, createScenarioPanelToolbarWidget, isScenarioPanelToolbarOpen, positionScenarioGroupMenu, setScenarioPanelToolbarOpen } from './browserEditorScenarioPanel.js';
 
 class BrowserEditorScenarioController extends BrowserEditorContribution {
 	private readonly _container = $('.browser-scenario-controller');
@@ -26,8 +26,10 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 	private _addingGroup = false;
 	private _addingControlGroupId: string | undefined;
 	private _addingChoiceKey: string | undefined;
-	private _panelPosition: IScenarioPanelPosition | undefined;
-	private _panelDragStore: DisposableStore | undefined;
+	private _openGroupId: string | undefined;
+	private _openGroupButton: HTMLElement | undefined;
+	private _openGroupMenu: HTMLElement | undefined;
+	private readonly _pendingChoiceValues = new Map<string, AppPreviewScenarioControlValue>();
 
 	constructor(
 		editor: BrowserEditor,
@@ -37,20 +39,19 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 
 		this._button = $('button.browser-scenario-button') as HTMLButtonElement;
 		this._button.type = 'button';
-		this._button.setAttribute('aria-haspopup', 'menu');
+		this._button.setAttribute('aria-haspopup', 'dialog');
 		this._button.setAttribute('aria-expanded', 'false');
 		this._button.appendChild($('span', { class: ThemeIcon.asClassName(Codicon.variableGroup) }));
 		this._button.appendChild($('span.browser-scenario-button-label', undefined, localize('scenario.button', "Variants")));
 		this._container.appendChild(this._button);
 		this._container.style.display = 'none';
 
-		this._panel.style.display = 'none';
-		updateScenarioPanelDropdownHost(this._container, this._panel, false);
+		setScenarioPanelToolbarOpen(this._panel, false);
 
 		this._register(addDisposableListener(this._button, EventType.CLICK, () => {
 			void this._togglePanel();
 		}));
-		this._register(addDisposableListener(mainWindow, EventType.RESIZE, () => this._positionPanel()));
+		this._register(addDisposableListener(mainWindow, EventType.RESIZE, () => this._positionOpenGroupMenu()));
 		this._register(this.appPreviewScenarioService.onDidChangeScenario(event => {
 			if (!event.tabId || event.tabId === this._model?.id) {
 				void this._refresh();
@@ -65,7 +66,10 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 	}
 
 	override get widgets(): readonly IBrowserEditorWidget[] {
-		return [{ location: BrowserWidgetLocation.PostUrl, element: this._container, order: 90 }];
+		return [
+			{ location: BrowserWidgetLocation.PostUrl, element: this._container, order: 90 },
+			createScenarioPanelToolbarWidget(this._panel)
+		];
 	}
 
 	protected override onModelAttached(model: IBrowserViewModel, store: DisposableStore): void {
@@ -73,7 +77,7 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		const visible = model.owner.kind === BrowserViewKind.AppPreview;
 		this._container.style.display = visible ? '' : 'none';
 		if (!visible) {
-			this._closePanel();
+			void this._closePanel();
 			return;
 		}
 
@@ -87,16 +91,16 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		this._model = undefined;
 		this._supportByTab.clear();
 		this._container.style.display = 'none';
-		this._closePanel();
+		void this._closePanel();
 	}
 
 	private async _togglePanel(): Promise<void> {
-		if (this._panel.style.display === 'none') {
-			await this._openPanel();
+		if (isScenarioPanelToolbarOpen(this._panel)) {
+			await this._closePanel();
 			return;
 		}
 
-		this._positionPanel();
+		await this._openPanel();
 	}
 
 	private async _openPanel(): Promise<void> {
@@ -104,33 +108,54 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 			return;
 		}
 
-		this._panel.style.display = '';
+		setScenarioPanelToolbarOpen(this._panel, true);
 		this._button.setAttribute('aria-expanded', 'true');
-		updateScenarioPanelDropdownHost(this._container, this._panel, true);
 		this._renderPendingPanel();
-		this._positionPanel();
+		this.editor.layoutBrowserContainer();
 		await this._refresh();
 	}
 
-	private _closePanel(): void {
-		this._panel.style.display = 'none';
+	private async _closePanel(): Promise<void> {
+		const wasOpen = isScenarioPanelToolbarOpen(this._panel);
+		setScenarioPanelToolbarOpen(this._panel, false);
 		this._button.setAttribute('aria-expanded', 'false');
-		updateScenarioPanelDropdownHost(this._container, this._panel, false);
-		this._panelDragStore?.dispose();
-		this._panelDragStore = undefined;
+		this._openGroupId = undefined;
+		this._openGroupButton = undefined;
+		this._openGroupMenu = undefined;
+		this._addingGroup = false;
+		this._addingControlGroupId = undefined;
+		this._addingChoiceKey = undefined;
+		this._pendingChoiceValues.clear();
+		if (wasOpen && this._model?.owner.kind === BrowserViewKind.AppPreview) {
+			await this.appPreviewScenarioService.resetTabToDefault(this._model.id);
+			await this._refresh({ refreshSupport: false });
+		}
+		if (wasOpen) {
+			this.editor.layoutBrowserContainer();
+		}
 	}
 
-	private _positionPanel(): void {
-		if (this._panel.style.display === 'none') {
+	private _closeOpenMenuSurface(): void {
+		const hadOpenMenu = !!this._openGroupMenu || !!this._panel.querySelector('.browser-scenario-group-menu');
+		closeScenarioGroupMenuSurface(this._panel);
+		this._addingGroup = false;
+		this._addingControlGroupId = undefined;
+		this._addingChoiceKey = undefined;
+		this._openGroupId = undefined;
+		this._openGroupButton = undefined;
+		this._openGroupMenu = undefined;
+		this._pendingChoiceValues.clear();
+		if (hadOpenMenu) {
+			this.editor.layoutBrowserContainer();
+		}
+	}
+
+	private _positionOpenGroupMenu(): void {
+		if (!isScenarioPanelToolbarOpen(this._panel) || !this._openGroupButton || !this._openGroupMenu) {
 			return;
 		}
 
-		if (this._panelPosition) {
-			this._panelPosition = positionScenarioPanelAt(this._panel, mainWindow, this._panelPosition);
-			return;
-		}
-
-		positionScenarioPanelDropdown(this._button, this._panel, mainWindow);
+		positionScenarioGroupMenu(this._panel, this._openGroupButton, this._openGroupMenu, mainWindow);
 	}
 
 	private async _refresh(options: { refreshSupport?: boolean } = {}): Promise<void> {
@@ -150,17 +175,16 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 
 		const support = this._supportByTab.get(model.id) ?? {};
 		const summary = summarizeAppPreviewScenarioState(configState.config, values);
-		const isDefault = summary === 'Default';
-		this._button.classList.toggle('custom', !isDefault);
+		this._button.classList.toggle('custom', isScenarioPanelToolbarOpen(this._panel));
 		const label = this._button.querySelector('.browser-scenario-button-label');
 		if (label) {
-			label.textContent = isDefault ? localize('scenario.button', "Variants") : summary;
+			label.textContent = localize('scenario.button', "Variants");
 		}
-		this._button.title = localize('scenario.buttonTitle', "App Preview variants: {0}", summary);
+		this._button.title = localize('scenario.buttonTitle', "App Preview variants");
 
-		if (this._panel.style.display !== 'none') {
+		if (isScenarioPanelToolbarOpen(this._panel)) {
 			this._renderPanel(model.id, configState, values, support, summary);
-			this._positionPanel();
+			this.editor.layoutBrowserContainer();
 			if (options.refreshSupport ?? true) {
 				void this._refreshSupport(model.id, generation);
 			}
@@ -174,7 +198,7 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		}
 
 		this._supportByTab.set(tabId, support);
-		if (this._panel.style.display !== 'none') {
+		if (isScenarioPanelToolbarOpen(this._panel)) {
 			void this._refresh({ refreshSupport: false });
 		}
 	}
@@ -183,226 +207,412 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		clearNode(this._panel);
 
 		const header = $('.browser-scenario-panel-header');
-		header.addEventListener('mousedown', event => this._startPanelDrag(event));
 		const titleRow = $('.browser-scenario-panel-title-row');
-		titleRow.appendChild($('.browser-scenario-panel-title', undefined, localize('scenario.title', "App Preview Variants")));
-		const actions = $('.span.browser-scenario-panel-actions');
-		actions.appendChild(this._createCloseButton());
-		titleRow.appendChild(actions);
+		titleRow.appendChild($('.browser-scenario-panel-summary', undefined, localize('scenario.loading', "Loading variants...")));
 		header.appendChild(titleRow);
-		header.appendChild($('.browser-scenario-panel-summary', undefined, localize('scenario.loading', "Loading variants...")));
 		this._panel.appendChild(header);
+
+		const closeAction = $('.span.browser-scenario-panel-close');
+		closeAction.appendChild(this._createCloseButton());
+		this._panel.appendChild(closeAction);
 	}
 
 	private _renderPanel(tabId: string, configState: Awaited<ReturnType<IAppPreviewScenarioService['readScenarioConfig']>>, values: Record<string, AppPreviewScenarioControlValue>, support: Record<string, AppPreviewScenarioSupportStatus>, summary: string): void {
 		clearNode(this._panel);
 		const canEdit = configState.errors.length === 0;
+		this._openGroupButton = undefined;
+		this._openGroupMenu = undefined;
+
+		if (this._addingGroup) {
+			this._openGroupId = undefined;
+		} else if (this._addingControlGroupId) {
+			this._openGroupId = this._addingControlGroupId;
+		} else if (this._addingChoiceKey) {
+			this._openGroupId = configState.config.groups.find(group =>
+				group.controls.some(control => getAppPreviewScenarioControlKey(group.id, control.id) === this._addingChoiceKey)
+			)?.id;
+		}
+
+		if (this._openGroupId && !configState.config.groups.some(group => group.id === this._openGroupId)) {
+			this._openGroupId = undefined;
+		}
 
 		const header = $('.browser-scenario-panel-header');
-		header.addEventListener('mousedown', event => this._startPanelDrag(event));
 		const titleRow = $('.browser-scenario-panel-title-row');
-		titleRow.appendChild($('.browser-scenario-panel-title', undefined, localize('scenario.title', "App Preview Variants")));
-		const panelActions = $('.span.browser-scenario-panel-actions');
+		titleRow.appendChild($('.browser-scenario-panel-summary', undefined, summary));
+		header.appendChild(titleRow);
+		this._panel.appendChild(header);
+
+		const groupsStrip = $('.browser-scenario-groups-strip');
+		groupsStrip.addEventListener('scroll', () => this._positionOpenGroupMenu());
+		this._panel.appendChild(groupsStrip);
+
+		if (configState.config.groups.length === 0) {
+			groupsStrip.appendChild($('.span.browser-scenario-empty-group', undefined, localize('scenario.emptyGroups', "No groups yet.")));
+		}
+
+		let openGroup: IAppPreviewScenarioGroup | undefined;
+		let addGroupButton: HTMLButtonElement | undefined;
+
+		for (const group of configState.config.groups) {
+			const groupButton = $('button.browser-scenario-group-tab');
+			groupButton.classList.add('browser-scenario-group-tab');
+			groupButton.classList.toggle('open', this._openGroupId === group.id);
+			groupButton.setAttribute('aria-expanded', String(this._openGroupId === group.id));
+			groupButton.addEventListener('click', () => {
+				const willOpen = this._openGroupId !== group.id;
+				this._openGroupId = willOpen ? group.id : undefined;
+				if (!willOpen) {
+					this._addingControlGroupId = undefined;
+					this._addingChoiceKey = undefined;
+				}
+				this._addingGroup = false;
+				void this._refresh({ refreshSupport: false });
+			});
+			const groupLabel = $('span.browser-scenario-group-title-text', undefined, group.label);
+			groupButton.appendChild(groupLabel);
+			const stateBadges = this._createGroupStateBadges(tabId, configState.config, group, values);
+			if (stateBadges) {
+				groupButton.appendChild(stateBadges);
+			}
+			groupsStrip.appendChild(groupButton);
+
+			if (this._openGroupId === group.id) {
+				openGroup = group;
+				this._openGroupButton = groupButton;
+			}
+		}
+
 		if (canEdit) {
-			const addGroupButton = this._createIconButton(Codicon.add, localize('scenario.addGroup', "Add group"));
+			addGroupButton = this._createIconButton(Codicon.add, localize('scenario.addGroup', "Add group"));
+			addGroupButton.classList.add('browser-scenario-group-tab', 'browser-scenario-group-add');
 			addGroupButton.addEventListener('click', () => {
 				this._addingGroup = true;
 				this._addingControlGroupId = undefined;
 				this._addingChoiceKey = undefined;
+				this._openGroupId = undefined;
 				void this._refresh({ refreshSupport: false });
 			});
-			panelActions.appendChild(addGroupButton);
-		}
-		panelActions.appendChild(this._createCloseButton());
-		titleRow.appendChild(panelActions);
-		header.appendChild(titleRow);
-		header.appendChild($('.browser-scenario-panel-summary', undefined, summary));
-		if (this._addingGroup && canEdit) {
-			header.appendChild(this._createAddGroupForm(configState.config));
-		}
-		this._panel.appendChild(header);
-
-		if (configState.errors.length > 0) {
-			this._panel.appendChild($('.browser-scenario-error', undefined, configState.errors[0].message));
-		}
-
-		for (const group of configState.config.groups) {
-			const section = $('.section.browser-scenario-group');
-			section.dataset.scenarioGroupId = group.id;
-			if (canEdit) {
-				section.addEventListener('dragover', event => {
-					event.preventDefault();
-					section.classList.add('drag-target');
-				});
-				section.addEventListener('dragleave', () => {
-					section.classList.remove('drag-target');
-				});
-				section.addEventListener('drop', event => {
-					event.preventDefault();
-					section.classList.remove('drag-target');
-					const dragPayload = this._getDragPayload(event);
-					if (!dragPayload) {
-						return;
-					}
-					void this._saveScenarioConfig(moveAppPreviewScenarioControl(configState.config, dragPayload.groupId, dragPayload.controlId, group.id));
-				});
-			}
-
-			const groupHeader = $('.browser-scenario-group-header');
-			groupHeader.appendChild($('.h3.browser-scenario-group-title', undefined, group.label));
-			if (canEdit) {
-				const groupActions = $('.span.browser-scenario-group-actions');
-				const addControlButton = this._createIconButton(Codicon.add, localize('scenario.addProperty', "Add property"));
-				addControlButton.addEventListener('click', () => {
-					this._addingGroup = false;
-					this._addingControlGroupId = group.id;
-					this._addingChoiceKey = undefined;
-					void this._refresh({ refreshSupport: false });
-				});
-				groupActions.appendChild(addControlButton);
-				const removeGroupButton = this._createIconButton(Codicon.trash, localize('scenario.removeGroup', "Remove group"));
-				removeGroupButton.addEventListener('click', () => {
-					void this._saveScenarioConfig(removeAppPreviewScenarioGroup(configState.config, group.id));
-				});
-				groupActions.appendChild(removeGroupButton);
-				groupHeader.appendChild(groupActions);
-			}
-			section.appendChild(groupHeader);
-			if (this._addingControlGroupId === group.id && canEdit) {
-				section.appendChild(this._createAddControlForm(configState.config, group.id));
-			}
-			if (group.controls.length === 0) {
-				section.appendChild($('.browser-scenario-empty-group', undefined, localize('scenario.emptyGroup', "No properties yet.")));
-			}
-
-			for (const control of group.controls) {
-				const key = getAppPreviewScenarioControlKey(group.id, control.id);
-				const defaultValue = configState.config.defaultValues[key];
-				const row = $('.browser-scenario-control');
-				row.draggable = canEdit;
-				if (canEdit) {
-					row.addEventListener('dragstart', event => {
-						row.classList.add('dragging');
-						event.dataTransfer?.setData('application/vnd.code.appPreviewVariantControl', JSON.stringify({ groupId: group.id, controlId: control.id }));
-						event.dataTransfer?.setData('text/plain', key);
-					});
-					row.addEventListener('dragend', () => row.classList.remove('dragging'));
-				}
-
-				const label = $('.browser-scenario-control-label');
-				const name = $('.span.browser-scenario-control-name');
-				if (canEdit) {
-					name.appendChild($('span', { class: `${ThemeIcon.asClassName(Codicon.arrowSwap)} browser-scenario-drag-handle` }));
-				}
-				name.appendChild($('span', undefined, control.label));
-				label.appendChild(name);
-
-				const actions = $('.span.browser-scenario-control-actions');
-				actions.appendChild(this._createSupportBadge(support[key]));
-				actions.appendChild(this._createControlDefaultButton(tabId, key, areAppPreviewScenarioValuesEqual(values[key], defaultValue), defaultValue));
-				if (canEdit) {
-					const removeControlButton = this._createIconButton(Codicon.trash, localize('scenario.removeProperty', "Remove property"));
-					removeControlButton.addEventListener('click', () => {
-						void this._saveScenarioConfig(removeAppPreviewScenarioControl(configState.config, group.id, control.id));
-					});
-					actions.appendChild(removeControlButton);
-				}
-				label.appendChild(actions);
-				row.appendChild(label);
-
-				if (control.type === 'choice' || control.type === 'multiChoice') {
-					row.classList.add(control.type === 'choice' ? 'choice' : 'multi-choice');
-					const currentValues = Array.isArray(values[key]) ? values[key] : [];
-					const dropdown = $('details.browser-scenario-value-dropdown') as HTMLDetailsElement;
-					const summary = $('summary.browser-scenario-value-summary');
-					summary.classList.toggle('custom', !areAppPreviewScenarioValuesEqual(values[key], defaultValue));
-					summary.appendChild($('span.browser-scenario-value-summary-text', undefined, this._formatControlSelection(control.choices, values[key])));
-					dropdown.appendChild(summary);
-					dropdown.open = this._addingChoiceKey === key;
-					const menu = $('.browser-scenario-value-menu');
-					for (const choice of control.choices) {
-						const checked = control.type === 'choice' ? values[key] === choice.id : currentValues.includes(choice.id);
-						const valueRow = $('.browser-scenario-value-menu-row');
-						const item = this._createTextButton(choice.label);
-						item.classList.add('browser-scenario-value-menu-item');
-						item.classList.toggle('checked', checked);
-						item.addEventListener('click', () => {
-							const nextValue = control.type === 'choice'
-								? choice.id
-								: checked
-									? currentValues.filter(value => value !== choice.id)
-									: [...currentValues, choice.id];
-							if (control.type === 'choice') {
-								dropdown.open = false;
-							}
-							void this.appPreviewScenarioService.setTabControlValue(tabId, key, nextValue).then(() => this._refresh());
-						});
-						valueRow.appendChild(item);
-						if (canEdit) {
-							const removeChoiceButton = this._createTextButton(localize('scenario.remove', "Remove"));
-							removeChoiceButton.classList.add('browser-scenario-value-remove');
-							removeChoiceButton.disabled = control.choices.length <= 1;
-							removeChoiceButton.addEventListener('click', event => {
-								event.preventDefault();
-								event.stopPropagation();
-								void this._saveScenarioConfig(removeAppPreviewScenarioChoice(configState.config, group.id, control.id, choice.id));
-							});
-							valueRow.appendChild(removeChoiceButton);
-						}
-						menu.appendChild(valueRow);
-					}
-					if (canEdit) {
-						const valueFooter = $('.browser-scenario-value-menu-footer');
-						const addChoiceButton = this._createTextButton(localize('scenario.addValue', "Add value"));
-						addChoiceButton.classList.add('browser-scenario-add-value');
-						addChoiceButton.addEventListener('click', event => {
-							event.preventDefault();
-							event.stopPropagation();
-							this._addingGroup = false;
-							this._addingControlGroupId = undefined;
-							this._addingChoiceKey = key;
-							void this._refresh({ refreshSupport: false });
-						});
-						if (this._addingChoiceKey === key) {
-							valueFooter.appendChild(this._createAddChoiceForm(configState.config, group.id, control.id));
-						} else {
-							valueFooter.appendChild(addChoiceButton);
-						}
-						menu.appendChild(valueFooter);
-					}
-					dropdown.appendChild(menu);
-					row.appendChild(dropdown);
-				} else {
-					row.classList.add('toggle');
-					const switchLabel = $('label.browser-scenario-switch');
-					const input = $('input') as HTMLInputElement;
-					input.type = 'checkbox';
-					input.checked = values[key] === true;
-					input.addEventListener('change', () => {
-						void this.appPreviewScenarioService.setTabControlValue(tabId, key, input.checked).then(() => this._refresh());
-					});
-					switchLabel.appendChild(input);
-					switchLabel.appendChild($('.span.browser-scenario-switch-track'));
-					row.appendChild(switchLabel);
-				}
-
-				section.appendChild(row);
-			}
-			this._panel.appendChild(section);
+			groupsStrip.appendChild(addGroupButton);
 		}
 
 		const footer = $('.browser-scenario-footer');
-		const resetButton = this._createTextButton(localize('scenario.reset', "Reset"));
-		resetButton.addEventListener('click', () => {
-			void this.appPreviewScenarioService.resetTabToDefault(tabId).then(() => this._refresh());
-		});
-		const cleanupButton = this._createTextButton(localize('scenario.cleanup', "Cleanup"));
+		const cleanupButton = this._createTextButton(localize('scenario.cleanup', "Cleanup artifacts"));
+		cleanupButton.title = localize('scenario.cleanupTitle', "Cleanup generated variant artifacts generated by the current app preview helpers.");
 		cleanupButton.addEventListener('click', () => {
 			void this._runCleanup();
+		});
+		const resetButton = this._createTextButton(localize('scenario.reset', "Reset variants"));
+		resetButton.title = localize('scenario.resetTitle', "Revert all variants to their default values.");
+		resetButton.addEventListener('click', () => {
+			void this._resetTabToDefaultAndRevealPreview(tabId);
 		});
 		footer.appendChild(cleanupButton);
 		footer.appendChild(resetButton);
 		this._panel.appendChild(footer);
+
+		const closeAction = $('.span.browser-scenario-panel-close');
+		closeAction.appendChild(this._createCloseButton());
+		this._panel.appendChild(closeAction);
+
+		if (configState.errors.length > 0) {
+			const errorMenu = $('.browser-scenario-group-menu.browser-scenario-error-menu');
+			errorMenu.appendChild($('.browser-scenario-error', undefined, configState.errors[0].message));
+			this._panel.appendChild(errorMenu);
+			this._openGroupMenu = errorMenu;
+			this._openGroupButton = header;
+			mainWindow.requestAnimationFrame(() => this._positionOpenGroupMenu());
+			return;
+		}
+
+		if (this._addingGroup && canEdit && addGroupButton) {
+			const addGroupMenu = $('.browser-scenario-group-menu.browser-scenario-add-group-menu');
+			addGroupMenu.appendChild(this._createAddGroupForm(configState.config));
+			this._panel.appendChild(addGroupMenu);
+			this._openGroupMenu = addGroupMenu;
+			this._openGroupButton = addGroupButton;
+			mainWindow.requestAnimationFrame(() => this._positionOpenGroupMenu());
+			return;
+		}
+
+		if (!openGroup) {
+			return;
+		}
+
+		const validKeys = new Set<string>();
+		for (const group of configState.config.groups) {
+			for (const control of group.controls) {
+				validKeys.add(getAppPreviewScenarioControlKey(group.id, control.id));
+			}
+		}
+		for (const key of Array.from(this._pendingChoiceValues.keys())) {
+			if (!validKeys.has(key)) {
+				this._pendingChoiceValues.delete(key);
+			}
+		}
+
+		const menu = $('.browser-scenario-group-menu');
+		const section = $('.section.browser-scenario-group');
+		section.dataset.scenarioGroupId = openGroup.id;
+		if (canEdit) {
+			section.addEventListener('dragover', event => {
+				event.preventDefault();
+				section.classList.add('drag-target');
+			});
+			section.addEventListener('dragleave', () => {
+				section.classList.remove('drag-target');
+			});
+			section.addEventListener('drop', event => {
+				event.preventDefault();
+				section.classList.remove('drag-target');
+				const dragPayload = this._getDragPayload(event);
+				if (!dragPayload) {
+					return;
+				}
+				void this._saveScenarioConfig(moveAppPreviewScenarioControl(configState.config, dragPayload.groupId, dragPayload.controlId, openGroup.id));
+			});
+		}
+
+		const groupHeader = $('.browser-scenario-group-header');
+		groupHeader.appendChild($('.h3.browser-scenario-group-title', undefined, openGroup.label));
+		if (canEdit) {
+			const groupActions = $('.span.browser-scenario-group-actions');
+			const addControlButton = this._createIconButton(Codicon.add, localize('scenario.addProperty', "Add property"));
+			addControlButton.addEventListener('click', () => {
+				this._addingGroup = false;
+				this._addingControlGroupId = openGroup.id;
+				this._addingChoiceKey = undefined;
+				this._openGroupId = openGroup.id;
+				void this._refresh({ refreshSupport: false });
+			});
+			groupActions.appendChild(addControlButton);
+			const removeGroupButton = this._createIconButton(Codicon.trash, localize('scenario.removeGroup', "Remove group"));
+			removeGroupButton.addEventListener('click', () => {
+				this._openGroupId = undefined;
+				void this._saveScenarioConfig(removeAppPreviewScenarioGroup(configState.config, openGroup.id));
+			});
+			groupActions.appendChild(removeGroupButton);
+			groupHeader.appendChild(groupActions);
+		}
+		section.appendChild(groupHeader);
+		if (this._addingControlGroupId === openGroup.id && canEdit) {
+			section.appendChild(this._createAddControlForm(configState.config, openGroup.id));
+		}
+		if (openGroup.controls.length === 0) {
+			section.appendChild($('.browser-scenario-empty-group', undefined, localize('scenario.emptyGroup', "No properties yet.")));
+		}
+
+		for (const control of openGroup.controls) {
+			const key = getAppPreviewScenarioControlKey(openGroup.id, control.id);
+			const defaultValue = configState.config.defaultValues[key];
+			const selectedValue = this._pendingChoiceValues.get(key) ?? values[key];
+			const row = $('.browser-scenario-control');
+			row.dataset.scenarioControlId = control.id;
+			row.draggable = canEdit;
+			if (canEdit) {
+				row.addEventListener('dragstart', event => {
+					row.classList.add('dragging');
+					event.dataTransfer?.setData('application/vnd.code.appPreviewVariantControl', JSON.stringify({ groupId: openGroup.id, controlId: control.id }));
+					event.dataTransfer?.setData('text/plain', key);
+				});
+				row.addEventListener('dragend', () => row.classList.remove('dragging'));
+				row.addEventListener('dragover', event => {
+					event.preventDefault();
+					row.classList.add('drag-target');
+				});
+				row.addEventListener('dragleave', () => row.classList.remove('drag-target'));
+				row.addEventListener('drop', event => {
+					event.preventDefault();
+					row.classList.remove('drag-target');
+					const dragPayload = this._getDragPayload(event);
+					if (!dragPayload) {
+						return;
+					}
+					if (dragPayload.groupId !== openGroup.id || dragPayload.controlId === control.id) {
+						return;
+					}
+					void this._saveScenarioConfig(moveAppPreviewScenarioControl(
+						configState.config,
+						dragPayload.groupId,
+						dragPayload.controlId,
+						openGroup.id,
+						control.id
+					));
+				});
+			}
+
+			const label = $('.browser-scenario-control-label');
+			const name = $('.span.browser-scenario-control-name');
+			if (canEdit) {
+				name.appendChild($('span', { class: `${ThemeIcon.asClassName(Codicon.arrowSwap)} browser-scenario-drag-handle` }));
+			}
+			name.appendChild($('span', undefined, control.label));
+			if (canEdit) {
+				const editControlNameButton = this._createIconButton(Codicon.edit, localize('scenario.renameProperty', "Rename variant"));
+				editControlNameButton.addEventListener('click', () => {
+					const nextName = this._promptText(localize('scenario.renamePropertyPrompt', "Rename variant"), control.label);
+					if (!nextName) {
+						return;
+					}
+					void this._saveScenarioConfig(updateAppPreviewScenarioControlLabel(configState.config, openGroup.id, control.id, nextName));
+				});
+				name.appendChild(editControlNameButton);
+			}
+			label.appendChild(name);
+
+			const actions = $('.span.browser-scenario-control-actions');
+			actions.appendChild(this._createSupportBadge(support[key]));
+			actions.appendChild(this._createControlDefaultButton(tabId, key, areAppPreviewScenarioValuesEqual(values[key], defaultValue), defaultValue));
+			if (canEdit) {
+				const removeControlButton = this._createIconButton(Codicon.trash, localize('scenario.removeProperty', "Remove property"));
+				removeControlButton.addEventListener('click', () => {
+					void this._saveScenarioConfig(removeAppPreviewScenarioControl(configState.config, openGroup.id, control.id));
+				});
+				actions.appendChild(removeControlButton);
+			}
+			label.appendChild(actions);
+			row.appendChild(label);
+
+			if (control.type === 'choice' || control.type === 'multiChoice') {
+				row.classList.add(control.type === 'choice' ? 'choice' : 'multi-choice');
+				const dropdown = $('details.browser-scenario-value-dropdown') as HTMLDetailsElement;
+				const valueSummary = $('summary.browser-scenario-value-summary');
+				valueSummary.classList.toggle('custom', !areAppPreviewScenarioValuesEqual(selectedValue, defaultValue));
+				const summaryText = $('span.browser-scenario-value-summary-text');
+				summaryText.textContent = this._formatControlSelection(control.choices, selectedValue);
+				valueSummary.appendChild(summaryText);
+				dropdown.appendChild(valueSummary);
+				dropdown.open = true;
+				const valueMenu = $('.browser-scenario-value-menu');
+				const getCurrentSelection = (): AppPreviewScenarioControlValue => this._pendingChoiceValues.get(key) ?? values[key];
+				let applyButton: HTMLButtonElement | undefined;
+				const setPending = (nextValue: AppPreviewScenarioControlValue): void => {
+					this._pendingChoiceValues.set(key, nextValue);
+					summaryText.textContent = this._formatControlSelection(control.choices, nextValue);
+					if (applyButton) {
+						applyButton.disabled = areAppPreviewScenarioValuesEqual(nextValue, values[key]);
+					}
+					const nextSelection = Array.isArray(nextValue) ? new Set(nextValue) : new Set([nextValue]);
+					for (const item of Array.from(valueMenu.querySelectorAll('.browser-scenario-value-menu-item'))) {
+						const itemChoiceId = item.getAttribute('data-choice-id');
+						if (!itemChoiceId) {
+							continue;
+						}
+						item.classList.toggle('checked', control.type === 'choice' ? itemChoiceId === nextValue : nextSelection.has(itemChoiceId));
+					}
+				};
+				for (const choice of control.choices) {
+					const checked = (() => {
+						const currentSelection = getCurrentSelection();
+						if (control.type === 'choice') {
+							return currentSelection === choice.id;
+						}
+						return Array.isArray(currentSelection) && currentSelection.includes(choice.id);
+					})();
+					const valueRow = $('.browser-scenario-value-menu-row');
+					const item = this._createTextButton(choice.label);
+					item.classList.add('browser-scenario-value-menu-item');
+					item.classList.toggle('checked', checked);
+					item.setAttribute('data-choice-id', choice.id);
+					item.addEventListener('click', () => {
+						const nextValue = (() => {
+							if (control.type === 'choice') {
+								return choice.id;
+							}
+
+							const currentSelection = getCurrentSelection();
+							const selectedValues = Array.isArray(currentSelection) ? currentSelection : [];
+							return selectedValues.includes(choice.id)
+								? selectedValues.filter(value => value !== choice.id)
+								: [...selectedValues, choice.id];
+						})();
+						if (canEdit) {
+							setPending(nextValue);
+							return;
+						}
+						void this._setTabControlValueAndRevealPreview(tabId, key, nextValue);
+					});
+					valueRow.appendChild(item);
+					if (canEdit) {
+						const editChoiceButton = this._createIconButton(Codicon.edit, localize('scenario.editValue', "Rename value"));
+						editChoiceButton.addEventListener('click', event => {
+							event.preventDefault();
+							event.stopPropagation();
+							const nextLabel = this._promptText(localize('scenario.editValuePrompt', "Rename value"), choice.label);
+							if (!nextLabel) {
+								return;
+							}
+							void this._saveScenarioConfig(updateAppPreviewScenarioChoiceLabel(configState.config, openGroup.id, control.id, choice.id, nextLabel));
+						});
+						valueRow.appendChild(editChoiceButton);
+					}
+					if (canEdit) {
+						const removeChoiceButton = this._createTextButton(localize('scenario.remove', "Remove"));
+						removeChoiceButton.classList.add('browser-scenario-value-remove');
+						removeChoiceButton.disabled = control.choices.length <= 1;
+						removeChoiceButton.addEventListener('click', event => {
+							event.preventDefault();
+							event.stopPropagation();
+							void this._saveScenarioConfig(removeAppPreviewScenarioChoice(configState.config, openGroup.id, control.id, choice.id));
+						});
+						valueRow.appendChild(removeChoiceButton);
+					}
+					valueMenu.appendChild(valueRow);
+				}
+				if (canEdit) {
+					const valueFooter = $('.browser-scenario-value-menu-footer');
+					const addChoiceButton = this._createTextButton(localize('scenario.addValue', "Add value"));
+					addChoiceButton.classList.add('browser-scenario-add-value');
+					addChoiceButton.addEventListener('click', event => {
+						event.preventDefault();
+						event.stopPropagation();
+						this._addingGroup = false;
+						this._addingControlGroupId = undefined;
+						this._addingChoiceKey = key;
+						this._openGroupId = openGroup.id;
+						void this._refresh({ refreshSupport: false });
+					});
+					if (this._addingChoiceKey === key) {
+						valueFooter.appendChild(this._createAddChoiceForm(configState.config, openGroup.id, control.id));
+					} else {
+						valueFooter.appendChild(addChoiceButton);
+					}
+					applyButton = this._createTextButton(localize('scenario.apply', "Apply"));
+					applyButton.classList.add('browser-scenario-value-apply');
+					applyButton.disabled = areAppPreviewScenarioValuesEqual(this._pendingChoiceValues.get(key) ?? selectedValue, values[key]);
+					applyButton.addEventListener('click', () => {
+						const nextValue = this._pendingChoiceValues.get(key);
+						if (nextValue === undefined) {
+							return;
+						}
+						void this._setTabControlValueAndRevealPreview(tabId, key, nextValue);
+					});
+					valueFooter.appendChild(applyButton);
+					valueMenu.appendChild(valueFooter);
+				}
+				dropdown.appendChild(valueMenu);
+				row.appendChild(dropdown);
+			} else {
+				row.classList.add('toggle');
+				const switchLabel = $('label.browser-scenario-switch');
+				const input = $('input') as HTMLInputElement;
+				input.type = 'checkbox';
+				input.checked = values[key] === true;
+				input.addEventListener('change', () => {
+					void this._setTabControlValueAndRevealPreview(tabId, key, input.checked);
+				});
+				switchLabel.appendChild(input);
+				switchLabel.appendChild($('.span.browser-scenario-switch-track'));
+				row.appendChild(switchLabel);
+			}
+
+			section.appendChild(row);
+		}
+
+		menu.appendChild(section);
+		this._panel.appendChild(menu);
+		this._openGroupMenu = menu;
+		mainWindow.requestAnimationFrame(() => this._positionOpenGroupMenu());
 	}
 
 	private _createAddGroupForm(config: IAppPreviewScenarioConfig): HTMLFormElement {
@@ -472,6 +682,57 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		});
 	}
 
+	private _createGroupStateBadges(tabId: string, config: IAppPreviewScenarioConfig, group: IAppPreviewScenarioGroup, values: Record<string, AppPreviewScenarioControlValue>): HTMLElement | undefined {
+		const badges = $('.span.browser-scenario-group-state-badges');
+		for (const control of group.controls) {
+			const key = getAppPreviewScenarioControlKey(group.id, control.id);
+			const defaultValue = config.defaultValues[key];
+			const currentValue = values[key];
+			if (defaultValue !== undefined && areAppPreviewScenarioValuesEqual(currentValue, defaultValue)) {
+				continue;
+			}
+
+			const badge = $('.span.browser-scenario-group-state-badge');
+			badge.appendChild($('span.browser-scenario-group-state-badge-text', undefined, this._formatControlValue(control, currentValue)));
+			const clearButton = this._createIconButton(Codicon.close, localize('scenario.revertState', "Revert this state"));
+			clearButton.addEventListener('click', event => {
+				event.preventDefault();
+				event.stopPropagation();
+				if (defaultValue !== undefined) {
+					void this._setTabControlValueAndRevealPreview(tabId, key, defaultValue);
+				}
+			});
+			badge.appendChild(clearButton);
+			badges.appendChild(badge);
+		}
+
+		return badges.children.length > 0 ? badges : undefined;
+	}
+
+	private _formatControlValue(control: { label: string; type: string; choices?: readonly { id: string; label: string }[] }, value: AppPreviewScenarioControlValue): string {
+		if (control.type === 'toggle') {
+			return `${control.label}: ${value ? localize('scenario.on', "on") : localize('scenario.off', "off")}`;
+		}
+
+		if (!Array.isArray(value)) {
+			const choiceValue = value === undefined ? localize('scenario.noneSelected', "None") : value;
+			if (control.type === 'choice' && control.choices) {
+				return `${control.label}: ${control.choices.find(option => option.id === choiceValue)?.label ?? choiceValue}`;
+			}
+		}
+
+		return `${control.label}: ${this._formatControlSelection(control.choices ?? [], value)}`;
+	}
+
+	private _promptText(title: string, initialValue: string): string | undefined {
+		const nextValue = mainWindow.prompt(title, initialValue);
+		if (!nextValue) {
+			return undefined;
+		}
+		const trimmed = nextValue.trim();
+		return trimmed.length > 0 ? trimmed : undefined;
+	}
+
 	private _createInlineTextForm(options: { placeholder: string; submitLabel: string; onSubmit: (label: string) => void; onCancel: () => void }): HTMLFormElement {
 		const form = $('form.browser-scenario-inline-form') as HTMLFormElement;
 		const input = $('input.browser-scenario-inline-input') as HTMLInputElement;
@@ -507,6 +768,18 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 		await this._refresh();
 	}
 
+	private async _setTabControlValueAndRevealPreview(tabId: string, key: string, value: AppPreviewScenarioControlValue): Promise<void> {
+		this._closeOpenMenuSurface();
+		await this.appPreviewScenarioService.setTabControlValue(tabId, key, value);
+		await this._refresh();
+	}
+
+	private async _resetTabToDefaultAndRevealPreview(tabId: string): Promise<void> {
+		this._closeOpenMenuSurface();
+		await this.appPreviewScenarioService.resetTabToDefault(tabId);
+		await this._refresh();
+	}
+
 	private _getDragPayload(event: DragEvent): { groupId: string; controlId: string } | undefined {
 		const raw = event.dataTransfer?.getData('application/vnd.code.appPreviewVariantControl');
 		if (!raw) {
@@ -527,44 +800,10 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 
 	private _createCloseButton(): HTMLButtonElement {
 		const closeButton = this._createIconButton(Codicon.close, localize('scenario.close', "Close variants"));
-		closeButton.addEventListener('click', () => this._closePanel());
+		closeButton.addEventListener('click', () => {
+			void this._closePanel();
+		});
 		return closeButton;
-	}
-
-	private _startPanelDrag(event: MouseEvent): void {
-		if (event.button !== 0 || this._panel.style.display === 'none') {
-			return;
-		}
-
-		const target = event.target as HTMLElement | null;
-		if (target?.closest('button,input,select,textarea,summary,details,a')) {
-			return;
-		}
-
-		event.preventDefault();
-		const rect = this._panel.getBoundingClientRect();
-		const offsetX = event.clientX - rect.left;
-		const offsetY = event.clientY - rect.top;
-		const dragStore = new DisposableStore();
-		this._panelDragStore?.dispose();
-		this._panelDragStore = dragStore;
-
-		const stopDrag = () => {
-			dragStore.dispose();
-			if (this._panelDragStore === dragStore) {
-				this._panelDragStore = undefined;
-			}
-		};
-
-		dragStore.add(addDisposableListener(mainWindow.document, EventType.MOUSE_MOVE, moveEvent => {
-			moveEvent.preventDefault();
-			this._panelPosition = positionScenarioPanelAt(this._panel, mainWindow, {
-				left: moveEvent.clientX - offsetX,
-				top: moveEvent.clientY - offsetY
-			});
-		}));
-		dragStore.add(addDisposableListener(mainWindow.document, EventType.MOUSE_UP, stopDrag));
-		dragStore.add(addDisposableListener(mainWindow, EventType.BLUR, stopDrag));
 	}
 
 	private _createSupportBadge(status: AppPreviewScenarioSupportStatus | undefined): HTMLElement {
@@ -643,7 +882,7 @@ class BrowserEditorScenarioController extends BrowserEditorContribution {
 			: localize('scenario.controlDefaultRevert', "Revert this control to its default value.");
 		button.addEventListener('click', () => {
 			if (defaultValue !== undefined) {
-				void this.appPreviewScenarioService.setTabControlValue(tabId, key, defaultValue).then(() => this._refresh());
+				void this._setTabControlValueAndRevealPreview(tabId, key, defaultValue);
 			}
 		});
 		return button;

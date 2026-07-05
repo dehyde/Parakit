@@ -22,7 +22,7 @@ import { getRemoteSourceActions, pickRemoteSource } from './remoteSource';
 import { RemoteSourceAction } from './typings/git-base';
 import { CloneManager } from './cloneManager';
 import { buildDesignerBranchTree, mergeDesignerBranchRefs } from './designerBranchModel';
-import { DesignerKnownRepo, getDesignerRepoLabel, mergeDesignerKnownRepos, parseDesignerRepoSource } from './designerRepoModel';
+import { DesignerKnownRepo, getDesignerRepoLabel, getDesignerRepoSwitchMode, mergeDesignerKnownRepos, parseDesignerRepoSource } from './designerRepoModel';
 import { isDesignerHostRepository } from './designerHostRepository';
 import { DesignerBranchCheckoutResult, DesignerBranchRef, DesignerBranchState, DesignerRepoItem, DesignerRepoRemoveResult, DesignerRepoState, DesignerRepoSwitchResult, DesignerSyncBlockedReason, DesignerSyncStatus } from './designerBranchTypes';
 import { getDesignerWorkspaceRepository as findDesignerWorkspaceRepository } from './designerWorkspaceRepository';
@@ -2958,6 +2958,7 @@ export class CommandCenter {
 
 		const nextState = await this.getDesignerBranchesStateForRepository(repository);
 		await this.reconcileDesignerWorkspaceContext(repository, previousBranchName, 'checkout');
+		await this.storeDesignerLastActiveWorkspace(repository.root, branchName);
 
 		return {
 			state: nextState,
@@ -3305,6 +3306,7 @@ export class CommandCenter {
 		await repository.checkout(state.defaultBranch, { pullBeforeCheckout: true });
 		await repository.branch(branchName, true, state.defaultBranch);
 		await this.reconcileDesignerWorkspaceContext(repository, previousBranchName, 'create');
+		await this.storeDesignerLastActiveWorkspace(repository.root, branchName);
 
 		return this.getDesignerBranchesStateForRepository(repository);
 	}
@@ -3492,16 +3494,23 @@ export class CommandCenter {
 		}
 
 		const currentRepoPath = workspace.workspaceFolders?.[0]?.uri.fsPath;
-		if (currentRepoPath && pathEquals(currentRepoPath, repoPath)) {
+		const repository = await this.getDesignerWorkspaceRepository();
+		const switchMode = getDesignerRepoSwitchMode({
+			currentRepoPath,
+			targetRepoPath: repoPath,
+			currentRepositoryAvailable: !!repository,
+			currentRepositoryIsHost: currentRepoPath ? isDesignerHostRepository(currentRepoPath, __dirname) : false
+		});
+
+		if (switchMode === 'alreadyOpen') {
 			return { state: await this.getDesignerReposStateInternal() };
 		}
 
-		if (currentRepoPath && isDesignerHostRepository(currentRepoPath, __dirname)) {
+		if (!repository || switchMode === 'switchWithoutSaving') {
 			return this.switchDesignerRepoWithoutSaving(options);
 		}
 
 		try {
-			const repository = await this.pickDesignerRepository();
 			await repository.status();
 
 			if (this.hasDesignerUnsavedChanges(repository)) {
@@ -3732,6 +3741,14 @@ export class CommandCenter {
 		const repos = await this.getDesignerKnownRepos(repoToStore, currentRepo);
 		await this.globalState.update(CommandCenter.designerReposStorageKey, repos);
 		await this.unhideDesignerRepo(repoToStore.path);
+	}
+
+	private async storeDesignerLastActiveWorkspace(repoPath: string, branchName: string): Promise<void> {
+		await commands.executeCommand('_designerWorkspaceTrust.trustFolder', {
+			path: repoPath,
+			name: getDesignerRepoLabel(repoPath),
+			branchName
+		});
 	}
 
 	private async removeDesignerKnownRepo(repoPath: string): Promise<void> {

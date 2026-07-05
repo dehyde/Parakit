@@ -34,6 +34,14 @@ export interface DesignerManagedRepoInput {
 export interface DesignerState {
 	readonly version: 1;
 	readonly lastActiveRepoPath?: string;
+	readonly lastActiveBranchName?: string;
+	readonly pendingStartupRestore?: DesignerPendingStartupRestore;
+}
+
+export interface DesignerPendingStartupRestore {
+	readonly repoPath: string;
+	readonly branchName?: string;
+	readonly createdAt: number;
 }
 
 export function getDesignerReposRoot(userHome: URI): URI {
@@ -123,17 +131,56 @@ export function parseDesignerState(raw: string | undefined): DesignerState {
 	const lastActiveRepoPath = typeof parsed.lastActiveRepoPath === 'string' && parsed.lastActiveRepoPath.trim()
 		? trimTrailingSeparators(parsed.lastActiveRepoPath.trim())
 		: undefined;
+	const lastActiveBranchName = typeof parsed.lastActiveBranchName === 'string' && parsed.lastActiveBranchName.trim()
+		? parsed.lastActiveBranchName.trim()
+		: undefined;
+	const pendingStartupRestore = parseDesignerPendingStartupRestore(parsed.pendingStartupRestore);
 
-	return lastActiveRepoPath ? { version: DESIGNER_STATE_VERSION, lastActiveRepoPath } : createEmptyDesignerState();
+	return createDesignerState({
+		version: DESIGNER_STATE_VERSION,
+		lastActiveRepoPath,
+		lastActiveBranchName: lastActiveRepoPath ? lastActiveBranchName : undefined,
+		pendingStartupRestore
+	});
 }
 
-export function updateDesignerLastActiveRepo(state: DesignerState, repoPath: string): DesignerState {
+export function updateDesignerLastActiveRepo(state: DesignerState, repoPath: string, branchName?: string): DesignerState {
 	const lastActiveRepoPath = trimTrailingSeparators(repoPath.trim());
 	if (!lastActiveRepoPath) {
 		return state;
 	}
 
-	return { version: DESIGNER_STATE_VERSION, lastActiveRepoPath };
+	return createDesignerState({
+		version: DESIGNER_STATE_VERSION,
+		lastActiveRepoPath,
+		lastActiveBranchName: branchName?.trim() || undefined,
+		pendingStartupRestore: state.pendingStartupRestore
+	});
+}
+
+export function markDesignerStartupRestorePending(state: DesignerState, createdAt = Date.now()): DesignerState {
+	if (!state.lastActiveRepoPath) {
+		return state;
+	}
+
+	return createDesignerState({
+		version: DESIGNER_STATE_VERSION,
+		lastActiveRepoPath: state.lastActiveRepoPath,
+		lastActiveBranchName: state.lastActiveBranchName,
+		pendingStartupRestore: createDesignerPendingStartupRestore({
+			repoPath: state.lastActiveRepoPath,
+			branchName: state.lastActiveBranchName,
+			createdAt
+		})
+	});
+}
+
+export function clearDesignerStartupRestorePending(state: DesignerState): DesignerState {
+	return createDesignerState({
+		version: DESIGNER_STATE_VERSION,
+		lastActiveRepoPath: state.lastActiveRepoPath,
+		lastActiveBranchName: state.lastActiveBranchName
+	});
 }
 
 export function getDesignerManagedRepoForFolder(manifest: DesignerManagedReposManifest, folderPath: string, appRoot: string | undefined): DesignerManagedRepoEntry | undefined {
@@ -213,6 +260,35 @@ function createEmptyDesignerManagedReposManifest(): DesignerManagedReposManifest
 
 function createEmptyDesignerState(): DesignerState {
 	return { version: DESIGNER_STATE_VERSION };
+}
+
+function createDesignerState(state: DesignerState): DesignerState {
+	return {
+		version: DESIGNER_STATE_VERSION,
+		...(state.lastActiveRepoPath ? { lastActiveRepoPath: state.lastActiveRepoPath } : {}),
+		...(state.lastActiveRepoPath && state.lastActiveBranchName ? { lastActiveBranchName: state.lastActiveBranchName } : {}),
+		...(state.pendingStartupRestore ? { pendingStartupRestore: state.pendingStartupRestore } : {})
+	};
+}
+
+function parseDesignerPendingStartupRestore(value: unknown): DesignerPendingStartupRestore | undefined {
+	if (!isObject(value) || typeof value.repoPath !== 'string' || !value.repoPath.trim() || typeof value.createdAt !== 'number') {
+		return undefined;
+	}
+
+	return createDesignerPendingStartupRestore({
+		repoPath: trimTrailingSeparators(value.repoPath.trim()),
+		branchName: typeof value.branchName === 'string' && value.branchName.trim() ? value.branchName.trim() : undefined,
+		createdAt: value.createdAt
+	});
+}
+
+function createDesignerPendingStartupRestore(state: DesignerPendingStartupRestore): DesignerPendingStartupRestore {
+	return {
+		repoPath: state.repoPath,
+		...(state.branchName ? { branchName: state.branchName } : {}),
+		createdAt: state.createdAt
+	};
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {

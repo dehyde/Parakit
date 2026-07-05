@@ -5,7 +5,7 @@
 
 import 'mocha';
 import * as assert from 'assert';
-import { parseDesignerRepoSource, mergeDesignerKnownRepos } from '../designerRepoModel';
+import { parseDesignerRepoSource, mergeDesignerKnownRepos, getDesignerRepoSwitchMode } from '../designerRepoModel';
 
 suite('Designer Repo Model', () => {
 	test('keeps current repo when switching to another repo', () => {
@@ -35,5 +35,14 @@ suite('Designer Repo Model', () => {
 			{ kind: 'remote', url: 'git@github.com:workplan/design-system.git' },
 			{ kind: 'localPath', path: '/Users/test/project' }
 		]);
+	});
+
+	test('switches without saving when the current repository is not available yet', () => {
+		assert.strictEqual(getDesignerRepoSwitchMode({
+			currentRepoPath: '/work/current',
+			targetRepoPath: '/work/target',
+			currentRepositoryAvailable: false,
+			currentRepositoryIsHost: false
+		}), 'switchWithoutSaving');
 	});
 });

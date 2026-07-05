@@ -1953,7 +1953,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 	private async _runPreviewServerTerminalCommand(terminal: ITerminalInstance, command: string, root: URI, branchName: string | undefined, context: IDesignerWorkspaceContext | undefined): Promise<void> {
 		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
 		if (!commandDetection) {
-			await terminal.sendText(command, true, true);
+			const result = await this._runPreviewTerminalCommandWithSentinel(terminal, command, PREVIEW_TERMINAL_READY_TIMEOUT);
+			if (result.timedOut) {
+				return;
+			}
+
+			await this._handlePreviewServerCommandExit(terminal, result, root, branchName, context);
 			return;
 		}
 

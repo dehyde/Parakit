@@ -39,7 +39,8 @@ suite('Designer Workspace Trust Command', () => {
 		await trustDesignerManagedFolder(fileService, trustService, environmentService, {
 			path: '/Users/test/Documents/Designer Repos/app',
 			name: 'app',
-			url: 'https://example.com/app.git'
+			url: 'https://example.com/app.git',
+			branchName: 'feature/design'
 		});
 
 		const manifest = await readDesignerManagedReposManifest(fileService, userHome);
@@ -47,7 +48,9 @@ suite('Designer Workspace Trust Command', () => {
 		assert.strictEqual(manifest.repos[0].path, '/Users/test/Documents/Designer Repos/app');
 		assert.strictEqual(manifest.repos[0].name, 'app');
 		assert.strictEqual(manifest.repos[0].url, 'https://example.com/app.git');
-		assert.strictEqual((await readDesignerState(fileService, userHome)).lastActiveRepoPath, '/Users/test/Documents/Designer Repos/app');
+		const state = await readDesignerState(fileService, userHome);
+		assert.strictEqual(state.lastActiveRepoPath, '/Users/test/Documents/Designer Repos/app');
+		assert.strictEqual(state.lastActiveBranchName, 'feature/design');
 		assert.deepStrictEqual(trustService.trustedUris.map(uri => uri.fsPath), ['/Users/test/Documents/Designer Repos/app']);
 	});
 

@@ -8,7 +8,8 @@ import { $ } from '../../../../../base/browser/dom.js';
 import { mainWindow } from '../../../../../base/browser/window.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { BrowserOverlayManager, BrowserOverlayType } from '../../electron-browser/overlayManager.js';
-import { updateScenarioPanelDropdownHost, positionScenarioPanelDropdown, positionScenarioPanelAt } from '../../electron-browser/features/browserEditorScenarioPanel.js';
+import { BrowserWidgetLocation } from '../../electron-browser/browserEditor.js';
+import { closeScenarioGroupMenuSurface, createScenarioPanelToolbarWidget, isScenarioPanelToolbarOpen, positionScenarioGroupMenu, SCENARIO_PANEL_TOOLBAR_ORDER, setScenarioPanelToolbarOpen } from '../../electron-browser/features/browserEditorScenarioPanel.js';
 
 suite('BrowserEditorScenarioFeatures', () => {
 	const store = ensureNoDisposablesAreLeakedInTestSuite();
@@ -22,86 +23,139 @@ suite('BrowserEditorScenarioFeatures', () => {
 		elements = [];
 	});
 
-	test('mounts the variants panel in the workbench dropdown host while open', () => {
-		const themedRoot = $('.scenario-test-themed-root');
-		const controller = $('.browser-scenario-controller');
+	test('contributes the variants panel as a toolbar widget below the URL bar', () => {
 		const panel = $('.browser-scenario-panel');
+		const widget = createScenarioPanelToolbarWidget(panel);
 
-		themedRoot.appendChild(controller);
-		mainWindow.document.body.appendChild(themedRoot);
-		elements.push(themedRoot);
-
-		updateScenarioPanelDropdownHost(controller, panel, true);
-
-		assert.strictEqual(panel.parentElement, mainWindow.document.body);
-		assert.strictEqual(controller.contains(panel), false);
-
-		updateScenarioPanelDropdownHost(controller, panel, false);
-
-		assert.strictEqual(panel.parentElement, controller);
+		assert.strictEqual(widget.location, BrowserWidgetLocation.Toolbar);
+		assert.strictEqual(widget.order, SCENARIO_PANEL_TOOLBAR_ORDER);
+		assert.strictEqual(widget.element, panel);
 	});
 
-	test('positions the variants panel like a viewport dropdown', () => {
-		const button = $('button.browser-scenario-button') as HTMLButtonElement;
+	test('toggles the toolbar variants strip without reparenting it', () => {
+		const root = $('.browser-root');
 		const panel = $('.browser-scenario-panel');
 
-		mainWindow.document.body.appendChild(button);
-		mainWindow.document.body.appendChild(panel);
-		elements.push(button, panel);
+		root.appendChild(panel);
+		mainWindow.document.body.appendChild(root);
+		elements.push(root);
 
+		setScenarioPanelToolbarOpen(panel, false);
+
+		assert.strictEqual(isScenarioPanelToolbarOpen(panel), false);
+		assert.strictEqual(panel.parentElement, root);
+		assert.strictEqual(panel.style.display, 'none');
+
+		setScenarioPanelToolbarOpen(panel, true);
+
+		assert.strictEqual(isScenarioPanelToolbarOpen(panel), true);
+		assert.strictEqual(panel.parentElement, root);
+		assert.strictEqual(panel.style.display, '');
+	});
+
+	test('positions a group menu below the one-line variants bar', () => {
+		const panel = $('.browser-scenario-panel');
+		const button = $('button.browser-scenario-group-tab') as HTMLButtonElement;
+		const menu = $('.browser-scenario-group-menu');
+
+		mainWindow.document.body.append(panel, button, menu);
+		elements.push(panel, button, menu);
+
+		panel.getBoundingClientRect = () => ({
+			x: 100,
+			y: 50,
+			width: 600,
+			height: 34,
+			top: 50,
+			right: 700,
+			bottom: 84,
+			left: 100,
+			toJSON: () => undefined
+		});
 		button.getBoundingClientRect = () => ({
-			x: 1420,
-			y: 40,
-			width: 104,
+			x: 620,
+			y: 55,
+			width: 90,
 			height: 24,
-			top: 40,
-			right: 1524,
-			bottom: 64,
-			left: 1420,
+			top: 55,
+			right: 710,
+			bottom: 79,
+			left: 620,
 			toJSON: () => undefined
 		});
 
-		positionScenarioPanelDropdown(button, panel, mainWindow, { viewportWidth: 1600, viewportHeight: 900 });
+		positionScenarioGroupMenu(panel, button, menu, mainWindow, { viewportWidth: 700, viewportHeight: 500 });
 
 		assert.deepStrictEqual({
-			position: panel.style.position,
-			left: panel.style.left,
-			top: panel.style.top,
-			right: panel.style.right,
-			width: panel.style.width,
-			maxHeight: panel.style.maxHeight,
+			position: menu.style.position,
+			left: menu.style.left,
+			top: menu.style.top,
+			width: menu.style.width,
+			maxHeight: menu.style.maxHeight,
 		}, {
-			position: 'fixed',
-			left: '1172px',
-			top: '70px',
-			right: 'auto',
-			width: '420px',
-			maxHeight: '822px',
+			position: 'absolute',
+			left: '252px',
+			top: '33px',
+			width: '340px',
+			maxHeight: '409px',
 		});
 	});
 
-	test('reports the variants panel as a non-pausing menu overlay over the browser container', () => {
-		const browserContainer = $('.browser-container');
-		Object.assign(browserContainer.style, {
-			position: 'absolute',
-			left: '250px',
-			top: '40px',
-			width: '300px',
-			height: '300px',
+	test('does not report the toolbar variants strip as an overlay over the browser container', () => {
+		const root = $('.browser-root');
+		Object.assign(root.style, {
+			position: 'relative',
+			width: '640px',
+			height: '420px',
 		});
 
 		const panel = $('.browser-scenario-panel');
 		Object.assign(panel.style, {
-			position: 'fixed',
-			left: '12px',
-			top: '38px',
-			width: '380px',
-			height: '520px',
-			zIndex: '100000',
+			position: 'relative',
+			width: '640px',
+			height: '34px',
 		});
 
-		mainWindow.document.body.append(browserContainer, panel);
-		elements.push(browserContainer, panel);
+		const browserContainer = $('.browser-container');
+		Object.assign(browserContainer.style, {
+			position: 'absolute',
+			left: '0px',
+			top: '34px',
+			width: '640px',
+			height: '386px',
+		});
+
+		root.append(panel, browserContainer);
+		mainWindow.document.body.appendChild(root);
+		elements.push(root);
+
+		const manager = store.add(new BrowserOverlayManager(mainWindow));
+		const overlays = manager.getOverlappingOverlays(browserContainer);
+
+		assert.deepStrictEqual(overlays, []);
+	});
+
+	test('reports the open variants group menu as a pausing overlay over the browser container', () => {
+		const browserContainer = $('.browser-container');
+		Object.assign(browserContainer.style, {
+			position: 'absolute',
+			left: '0px',
+			top: '40px',
+			width: '640px',
+			height: '386px',
+		});
+
+		const groupMenu = $('.browser-scenario-group-menu');
+		Object.assign(groupMenu.style, {
+			position: 'absolute',
+			left: '260px',
+			top: '34px',
+			width: '340px',
+			height: '260px',
+		});
+
+		mainWindow.document.body.append(browserContainer, groupMenu);
+		elements.push(browserContainer, groupMenu);
 
 		const manager = store.add(new BrowserOverlayManager(mainWindow));
 		const overlays = manager.getOverlappingOverlays(browserContainer);
@@ -109,33 +163,26 @@ suite('BrowserEditorScenarioFeatures', () => {
 		assert.deepStrictEqual(overlays.map(overlay => ({
 			type: overlay.type,
 			pausesBrowser: overlay.pausesBrowser
-		})), [{ type: BrowserOverlayType.Menu, pausesBrowser: false }]);
+		})), [{ type: BrowserOverlayType.Menu, pausesBrowser: true }]);
 	});
 
-	test('constrains a dragged variants panel inside the viewport', () => {
+	test('closes only the variants group menu surface when revealing the preview', () => {
 		const panel = $('.browser-scenario-panel');
-		Object.assign(panel.style, {
-			width: '420px',
-			height: '260px',
-		});
+		const groupButton = $('button.browser-scenario-group-tab.open') as HTMLButtonElement;
+		groupButton.setAttribute('aria-expanded', 'true');
+		const groupMenu = $('.browser-scenario-group-menu');
 
-		mainWindow.document.body.appendChild(panel);
+		panel.append(groupButton, groupMenu);
+		mainWindow.document.body.append(panel);
 		elements.push(panel);
 
-		const position = positionScenarioPanelAt(panel, mainWindow, { left: 500, top: 500 }, { viewportWidth: 600, viewportHeight: 400 });
+		setScenarioPanelToolbarOpen(panel, true);
+		closeScenarioGroupMenuSurface(panel);
 
-		assert.deepStrictEqual(position, { left: 172, top: 132 });
-		assert.deepStrictEqual({
-			position: panel.style.position,
-			left: panel.style.left,
-			top: panel.style.top,
-			right: panel.style.right,
-		}, {
-			position: 'fixed',
-			left: '172px',
-			top: '132px',
-			right: 'auto',
-		});
+		assert.strictEqual(isScenarioPanelToolbarOpen(panel), true);
+		assert.strictEqual(panel.querySelector('.browser-scenario-group-menu'), null);
+		assert.strictEqual(groupButton.classList.contains('open'), false);
+		assert.strictEqual(groupButton.getAttribute('aria-expanded'), 'false');
 	});
 
 });

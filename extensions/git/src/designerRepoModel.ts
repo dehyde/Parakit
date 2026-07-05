@@ -13,12 +13,21 @@ export type DesignerRepoSource =
 	| { readonly kind: 'remote'; readonly url: string }
 	| { readonly kind: 'localPath'; readonly path: string };
 
+export type DesignerRepoSwitchMode = 'alreadyOpen' | 'saveThenSwitch' | 'switchWithoutSaving';
+
 interface MergeDesignerKnownReposOptions {
 	readonly currentRepo?: DesignerKnownRepo;
 	readonly storedRepos: readonly { readonly path?: string; readonly name?: string; readonly url?: string }[];
 	readonly discoveredRepos: readonly DesignerKnownRepo[];
 	readonly repoToInclude?: DesignerKnownRepo;
 	readonly hiddenRepoPaths: readonly string[];
+}
+
+interface DesignerRepoSwitchModeOptions {
+	readonly currentRepoPath?: string;
+	readonly targetRepoPath: string;
+	readonly currentRepositoryAvailable: boolean;
+	readonly currentRepositoryIsHost: boolean;
 }
 
 export function mergeDesignerKnownRepos(options: MergeDesignerKnownReposOptions): DesignerKnownRepo[] {
@@ -45,6 +54,18 @@ export function mergeDesignerKnownRepos(options: MergeDesignerKnownReposOptions)
 	appendRepo(repos, options.repoToInclude, options.hiddenRepoPaths, false);
 
 	return repos;
+}
+
+export function getDesignerRepoSwitchMode(options: DesignerRepoSwitchModeOptions): DesignerRepoSwitchMode {
+	if (options.currentRepoPath && pathEquals(options.currentRepoPath, options.targetRepoPath)) {
+		return 'alreadyOpen';
+	}
+
+	if (!options.currentRepoPath || options.currentRepositoryIsHost || !options.currentRepositoryAvailable) {
+		return 'switchWithoutSaving';
+	}
+
+	return 'saveThenSwitch';
 }
 
 export function getDesignerRepoLabel(repoPath: string): string {

@@ -12,7 +12,7 @@ import { CommandsRegistry, ICommandService } from '../../../../platform/commands
 import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { localize } from '../../../../nls.js';
-import { GetDesignerBranchesStateCommandId, GetDesignerReposStateCommandId, SaveAndCheckoutDesignerBranchCommandId, SaveAndSwitchDesignerRepoCommandId, SwitchDesignerRepoCommandId, CheckoutDesignerBranchCommandId, type DesignerBranchCheckoutResult, type DesignerBranchItem, type DesignerBranchSetup, type DesignerBranchState, type DesignerBranchTreeNode, type DesignerRepoItem, type DesignerRepoRemoveResult, type DesignerRepoState, type DesignerRepoSwitchResult, type DesignerSyncState } from '../../../services/workspaces/common/designerRepoCommands.js';
+import { GetDesignerBranchesStateCommandId, GetDesignerReposStateCommandId, SaveAndCheckoutDesignerBranchCommandId, SwitchDesignerRepoCommandId, CheckoutDesignerBranchCommandId, type DesignerBranchCheckoutResult, type DesignerBranchItem, type DesignerBranchSetup, type DesignerBranchState, type DesignerBranchTreeNode, type DesignerRepoItem, type DesignerRepoRemoveResult, type DesignerRepoState, type DesignerRepoSwitchResult, type DesignerSyncState } from '../../../services/workspaces/common/designerRepoCommands.js';
 
 const onDidChangeDesignerBranchStateEmitter = new Emitter<DesignerBranchState>();
 
@@ -1106,14 +1106,14 @@ export class DesignerBranchSwitcher extends Disposable {
 
 	private async switchRepo(repoPath: string): Promise<void> {
 		this.switchingRepoPath = repoPath;
-		this.activeSyncState = 'saving';
+		this.activeSyncState = undefined;
 		this.repoProblemMessage = undefined;
 		this.blockedRepoPath = undefined;
 		this.recoveryAgentPrompt = undefined;
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SaveAndSwitchDesignerRepoCommandId, { repoPath });
+			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SwitchDesignerRepoCommandId, { repoPath, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerRepoSwitcherSwitchFailed', "Repo could not be opened."));
 			}
