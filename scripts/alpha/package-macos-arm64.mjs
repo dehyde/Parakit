@@ -21,9 +21,11 @@ const releaseBaseUrl = `https://github.com/dehyde/Parakit/releases/download/${re
 
 const args = new Set(process.argv.slice(2));
 const skipBuild = args.has('--skip-build');
+const skipSign = args.has('--skip-sign');
 const allowCommitMismatch = args.has('--allow-commit-mismatch');
 const appPath = getArgValue('--app') ?? path.resolve(repoRoot, '..', 'VSCode-darwin-arm64', 'Parakit.app');
 const outputDir = getArgValue('--output') ?? defaultOutputDir;
+const signIdentity = getRawArgValue('--sign-identity') ?? '-';
 const archivePath = path.join(outputDir, assetName);
 const feedPath = path.join(outputDir, 'latest.json');
 
@@ -50,6 +52,11 @@ if (!allowCommitMismatch && packagedProduct.commit && packagedProduct.commit !==
 	throw new Error(`Packaged app commit ${packagedProduct.commit} does not match repository HEAD ${commit}. Rebuild or pass --allow-commit-mismatch.`);
 }
 
+if (!skipSign) {
+	run('/usr/bin/codesign', ['--force', '--deep', '--sign', signIdentity, appPath]);
+}
+run('/usr/bin/codesign', ['--verify', '--deep', '--strict', '--verbose=2', appPath]);
+
 run('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, archivePath]);
 
 const archiveStats = await stat(archivePath);
@@ -72,6 +79,11 @@ console.log(`Commit ${commit}`);
 console.log(`SHA-256 ${sha256}`);
 
 function getArgValue(name) {
+	const value = getRawArgValue(name);
+	return value === undefined ? undefined : path.resolve(repoRoot, value);
+}
+
+function getRawArgValue(name) {
 	const args = process.argv.slice(2);
 	const index = args.indexOf(name);
 	if (index === -1) {
@@ -80,7 +92,7 @@ function getArgValue(name) {
 	if (!args[index + 1]) {
 		throw new Error(`Missing value for ${name}`);
 	}
-	return path.resolve(repoRoot, args[index + 1]);
+	return args[index + 1];
 }
 
 async function assertDirectory(directoryPath, message) {
