@@ -38,6 +38,8 @@ run('git', ['push', 'origin', `refs/tags/${releaseTag}`, '--force']);
 const releaseExists = spawnSync('gh', ['release', 'view', releaseTag], { cwd: repoRoot, stdio: 'ignore' }).status === 0;
 if (!releaseExists) {
 	run('gh', ['release', 'create', releaseTag, '--title', releaseTitle, '--notes', `Alpha build for ${commit}.`, '--target', commit]);
+} else {
+	run('gh', ['release', 'edit', releaseTag, '--title', releaseTitle, '--notes', `Alpha build for ${commit}.`, '--target', commit]);
 }
 
 run('gh', ['release', 'upload', releaseTag, archivePath, feedPath, '--clobber']);
