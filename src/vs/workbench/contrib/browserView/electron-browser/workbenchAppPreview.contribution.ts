@@ -44,7 +44,7 @@ import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, 
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewInstallOutcome, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, shouldSkipWorkbenchAppPreviewAutoStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState } from '../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, parseWorkbenchAppPreviewRsbuildConfig, resolveWorkbenchAppPreviewAdvertisedNavigationUrl, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewDevServerTarget, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewInstallOutcome, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, shouldSkipWorkbenchAppPreviewAutoStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState, WorkbenchAppPreviewTargetPreviewSource } from '../common/appPreviewConfig.js';
 import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyArtifactMtime, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
@@ -96,6 +96,14 @@ const APP_PREVIEW_LOCKFILE_PATHS = [
 const PREVIEW_TERMINAL_READY_TIMEOUT = 10_000;
 const PREVIEW_TERMINAL_READY_ATTEMPTS = 2;
 const PREVIEW_STATIC_HTML_INDEX_DIRS = ['', 'docs', 'public', 'dist', 'build', 'site', 'out'];
+const PREVIEW_RSBUILD_CONFIG_PATHS = [
+	'rsbuild.config.ts',
+	'rsbuild.config.mts',
+	'rsbuild.config.cts',
+	'rsbuild.config.js',
+	'rsbuild.config.mjs',
+	'rsbuild.config.cjs',
+];
 const PREVIEW_STATIC_HTML_SCAN_DIRS: readonly { readonly dir: string; readonly depth: number }[] = [
 	{ dir: '', depth: 0 },
 	{ dir: 'docs', depth: 2 },
@@ -354,6 +362,22 @@ async function readPreviewEnv(fileService: IFileService, repository: URI): Promi
 	return env;
 }
 
+async function readRsbuildDevServerConfig(fileService: IFileService, repository: URI) {
+	for (const file of PREVIEW_RSBUILD_CONFIG_PATHS) {
+		try {
+			const content = await fileService.readFile(joinPath(repository, file));
+			const parsed = parseWorkbenchAppPreviewRsbuildConfig(content.value.toString());
+			if (parsed) {
+				return parsed;
+			}
+		} catch {
+			// Framework config files are optional.
+		}
+	}
+
+	return undefined;
+}
+
 async function statWorkbenchAppPreviewPathMtime(fileService: IFileService, resource: URI): Promise<number | undefined> {
 	try {
 		return (await fileService.stat(resource)).mtime;
@@ -536,7 +560,8 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		const scripts = typeof parsed === 'object' && parsed !== null ? (parsed as { scripts?: Record<string, unknown> }).scripts : undefined;
 		const packageManager = typeof parsed === 'object' && parsed !== null ? (parsed as { packageManager?: unknown }).packageManager : undefined;
 		const packageManagerConfig = await resolveHeuristicPackageManagerConfig(fileService, repository, typeof packageManager === 'string' ? packageManager : undefined, logService);
-		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env, packageManagerConfig);
+		const frameworkConfig = await readRsbuildDevServerConfig(fileService, repository);
+		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env, packageManagerConfig, frameworkConfig);
 		if (npmConfig) {
 			return npmConfig;
 		}
@@ -1069,6 +1094,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 	private _discoveredUrl: string | undefined;
 	private _discoveredUrlBranchName: string | undefined;
 	private _activeManagedPreviewUrl: string | undefined;
+	private _serverPreviewUrl: string | undefined;
+	private _serverPreviewSource: WorkbenchAppPreviewTargetPreviewSource | undefined;
 	private _workspaceRootKey: string | undefined;
 	private _lastBranchName: string | undefined;
 	private _hasObservedBranchName = false;
@@ -2215,7 +2242,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		this._serverUrl = normalizedUrl;
 		this._serverHealthUrl = healthUrl;
-		this._discoveredUrl = normalizedUrl;
+		const navigationUrl = resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: normalizedUrl,
+			previewUrl: this._serverPreviewUrl,
+			previewSource: this._serverPreviewSource,
+		});
+		this._discoveredUrl = navigationUrl;
 		this._discoveredUrlBranchName = branchName;
 		storeBranchRuntime(this._storageService, root, branchName, {
 			...getBranchRuntime(this._storageService, root, branchName),
@@ -2234,7 +2266,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 				return;
 			}
 
-			await this.navigateDiscoveredUrl(normalizedUrl, { trustedSource: true });
+			await this.navigateDiscoveredUrl(navigationUrl, { trustedSource: true });
 		}
 
 	private _resolveHealthUrl(url: string, healthPath: string | undefined): string {
@@ -2942,24 +2974,36 @@ export class WorkbenchAppPreviewController extends Disposable {
 			}
 		}
 
-		const resolvedServer = applyWorkbenchAppPreviewDevPort(resolvedConfig, port);
-		const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, String(port));
-		let serverCommand = resolvedServer.command;
-		let installCommand = resolvedConfig.installCommand ? replacePort(resolvedConfig.installCommand) : undefined;
 		const cwd = resolvedConfig.cwd ? joinPath(root, resolvedConfig.cwd).fsPath : root.fsPath;
-		this._serverUrl = resolvedServer.url;
-		this._serverHealthUrl = resolvedServer.healthUrl;
-		this._serverHealthPath = resolvedConfig.healthPath;
+		const resolvedTarget = resolveWorkbenchAppPreviewDevServerTarget(resolvedConfig, port, cwd);
+		const resolvedServer = {
+			command: resolvedTarget.process.command,
+			env: resolvedTarget.process.env,
+			url: resolvedTarget.server.url,
+			healthUrl: resolvedTarget.health.url,
+		};
+		const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, String(resolvedTarget.port.value));
+		let serverCommand = resolvedTarget.process.command;
+		let installCommand = resolvedConfig.installCommand ? replacePort(resolvedConfig.installCommand) : undefined;
+		this._serverUrl = resolvedTarget.server.url;
+		this._serverHealthUrl = resolvedTarget.health.url;
+		this._serverHealthPath = resolvedConfig.healthUrl ? resolvedTarget.health.url : resolvedConfig.healthPath;
+		this._serverPreviewUrl = resolvedTarget.preview.url;
+		this._serverPreviewSource = resolvedTarget.preview.source;
 		this._serverBranch = branchName;
 		this._serverCommand = serverCommand;
-		this._serverPort = port;
+		this._serverPort = resolvedTarget.port.value;
 		this._serverFixedPort = fixedPort;
 		this._serverCwd = cwd;
 		storeBranchRuntime(this._storageService, root, branchName, {
 			...getBranchRuntime(this._storageService, root, branchName),
-			port,
-			lastUrl: resolvedServer.url
+			port: resolvedTarget.port.value,
+			lastUrl: resolvedTarget.server.url
 		});
+		if (resolvedTarget.preview.source !== 'server') {
+			this._discoveredUrl = resolvedTarget.preview.url;
+			this._discoveredUrlBranchName = branchName;
+		}
 
 		await this.ensurePreview(false);
 		if (waitForHealthy) {
@@ -3132,7 +3176,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 					// Health succeeded even if the terminal output did not advertise a URL first.
 					// Mark the managed server URL as discovered so the handoff can keep it without
 					// enabling raw running-server fallback in unrelated preferred-url calls.
-					if (this._serverUrl && (!isWorkbenchAppPreviewUrlForBranch(this._discoveredUrlBranchName, branchName) || this._discoveredUrl !== this._serverUrl)) {
+					if (this._serverUrl && !isWorkbenchAppPreviewUrlForBranch(this._discoveredUrlBranchName, branchName)) {
 						this._discoveredUrl = this._serverUrl;
 						this._discoveredUrlBranchName = branchName;
 					}
@@ -3392,6 +3436,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		this._activeManagedPreviewUrl = undefined;
 		this._serverHealthUrl = undefined;
 		this._serverHealthPath = undefined;
+		this._serverPreviewUrl = undefined;
+		this._serverPreviewSource = undefined;
 		this._serverBranch = undefined;
 		this._serverCommand = undefined;
 		this._serverPort = undefined;

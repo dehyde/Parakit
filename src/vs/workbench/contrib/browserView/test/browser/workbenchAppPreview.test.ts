@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, parseWorkbenchAppPreviewRsbuildConfig, resolveWorkbenchAppPreviewAdvertisedNavigationUrl, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevServerTarget, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
 import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
 import { getSerializableBrowserEditorInputData } from '../../common/browserEditorInput.js';
 
@@ -100,6 +100,19 @@ suite('Workbench App Preview', () => {
 			discoveredUrl: 'https://local.preview.example.test:15761/',
 			allowRunningServerFallback: false,
 		}), 'https://local.preview.example.test:15761/');
+	});
+
+	test('server advertisements keep framework preview URLs as the navigated URL', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: 'https://local.preview.example.test:3001/',
+			previewUrl: 'https://external-shell.example.test/build/app?infraPreviewPath=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+		}), 'https://external-shell.example.test/build/app?infraPreviewPath=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js');
+
+		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: 'https://local.preview.example.test:3001/',
+			previewSource: 'server',
+		}), 'https://local.preview.example.test:3001/');
 	});
 
 	test('preferred URL keeps configured default over duplicate running server fallback', () => {
@@ -896,6 +909,55 @@ suite('Workbench App Preview', () => {
 		});
 	});
 
+	test('dev config supports absolute health URL separate from preview URL', () => {
+		const resolvedConfig = resolveWorkbenchAppPreviewDevConfig({
+			default: {
+				command: 'npm run dev',
+				portEnv: 'NODE_PORT',
+				url: 'https://local.preview.example.test:${PORT}/app/projects',
+				healthUrl: 'https://local.preview.example.test:${PORT}/healthz',
+			}
+		}, undefined);
+
+		assert.ok(resolvedConfig);
+		assert.deepStrictEqual(applyWorkbenchAppPreviewDevPort(resolvedConfig, 3001), {
+			command: 'npm run dev',
+			env: { BROWSER: 'none', NODE_PORT: '3001' },
+			url: 'https://local.preview.example.test:3001/app/projects',
+			healthUrl: 'https://local.preview.example.test:3001/healthz',
+		});
+	});
+
+	test('resolved dev server target separates process, server, health, and preview URL', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDevServerTarget({
+			command: 'pnpm run start',
+			portEnv: 'NODE_PORT',
+			url: 'https://local.preview.example.test:3001/',
+			healthUrl: 'https://local.preview.example.test:3001/ready',
+			fixedPort: 3001,
+			previewUrl: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+			allowSelfSignedLocalHttps: true,
+		}, 4912, '/workspaces/example'), {
+			process: {
+				command: 'pnpm run start',
+				cwd: '/workspaces/example',
+				env: { BROWSER: 'none', NODE_PORT: '3001' },
+			},
+			port: { mode: 'fixed', value: 3001, env: 'NODE_PORT' },
+			server: {
+				url: 'https://local.preview.example.test:3001/',
+				origin: 'https://local.preview.example.test:3001',
+				allowSelfSignedLocalHttps: true,
+			},
+			health: { url: 'https://local.preview.example.test:3001/ready' },
+			preview: {
+				url: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+				source: 'frameworkOpen',
+			},
+		});
+	});
+
 	test('dev config without portEnv does not inject PORT for literal URL', () => {
 		const resolvedConfig = resolveWorkbenchAppPreviewDevConfig({
 			default: {
@@ -952,6 +1014,44 @@ suite('Workbench App Preview', () => {
 			installCommand: 'pnpm install',
 			dependencyReadiness: 'missing',
 		});
+	});
+
+	test('heuristic dev config uses static Rsbuild server config when available', () => {
+		const rsbuildConfig = parseWorkbenchAppPreviewRsbuildConfig(`
+			export default {
+				server: {
+					host: 'local.preview.example.test',
+					port: Number(process.env.NODE_PORT) || 3001,
+					https: {
+						key: './.cert/key.pem',
+						cert: './.cert/cert.pem',
+					},
+					open: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+				},
+			};
+		`);
+
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			'start:ci': 'rsbuild dev',
+		}, undefined, undefined, {
+			scriptCommandPrefix: 'pnpm run',
+		}, rsbuildConfig), {
+			command: 'pnpm run start:ci',
+			portEnv: 'NODE_PORT',
+			url: 'https://local.preview.example.test:3001/',
+			healthPath: '/',
+			fixedPort: 3001,
+			previewUrl: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+			allowSelfSignedLocalHttps: true,
+		});
+	});
+
+	test('heuristic dev config declines dynamic Rsbuild server config', () => {
+		assert.strictEqual(parseWorkbenchAppPreviewRsbuildConfig(`
+			const host = computeHost();
+			export default { server: { host } };
+		`), undefined);
 	});
 
 	test('heuristic dev config uses fixed app port from repo environment', () => {
@@ -1031,10 +1131,10 @@ suite('Workbench App Preview', () => {
 	test('static HTML config can open a detected document path', () => {
 		const resolveStaticHtmlConfig = resolveWorkbenchAppPreviewStaticHtmlConfig as unknown as (serveDir: string, initialPath?: string) => ReturnType<typeof resolveWorkbenchAppPreviewStaticHtmlConfig>;
 
-		assert.deepStrictEqual(resolveStaticHtmlConfig('docs/architecture', 'forma-architecture.html'), {
+		assert.deepStrictEqual(resolveStaticHtmlConfig('docs/architecture', 'example-architecture.html'), {
 			command: 'python3 -m http.server ${PORT} --directory docs/architecture',
 			portEnv: 'PORT',
-			url: 'http://127.0.0.1:${PORT}/forma-architecture.html',
+			url: 'http://127.0.0.1:${PORT}/example-architecture.html',
 			healthPath: '/',
 		});
 	});
@@ -1042,10 +1142,10 @@ suite('Workbench App Preview', () => {
 	test('static HTML selection prefers architecture docs over lower-signal pages', () => {
 		assert.strictEqual(selectWorkbenchAppPreviewStaticHtmlFile([
 			'docs/architecture/repo-map.diagram.html',
-			'docs/architecture/forma-composable-model.html',
-			'docs/architecture/forma-architecture.html',
-			'docs/architecture/forma-containment-model.html',
-		]), 'docs/architecture/forma-architecture.html');
+			'docs/architecture/example-composable-model.html',
+			'docs/architecture/example-architecture.html',
+			'docs/architecture/example-containment-model.html',
+		]), 'docs/architecture/example-architecture.html');
 	});
 
 	test('preview server config can start without install when it has no install commands', () => {
@@ -1090,6 +1190,28 @@ suite('Workbench App Preview', () => {
 		);
 	});
 
+	test('does not inject assigned ports into external preview URLs', () => {
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://external-shell.example.test:443/app/projects?remote=https://local.preview.example.test:3001/assets.js', 4821),
+			'https://external-shell.example.test/app/projects?remote=https://local.preview.example.test:3001/assets.js'
+		);
+	});
+
+	test('adapts only the managed local server origin when one is provided', () => {
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://external-shell.example.test:443/app/projects?remote=https://local.preview.example.test:3001/assets.js', 4821, {
+				managedServerOrigin: 'https://local.preview.example.test:3001'
+			}),
+			'https://external-shell.example.test/app/projects?remote=https://local.preview.example.test:3001/assets.js'
+		);
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://local.preview.example.test:3001/app/projects?tab=overview#details', 4821, {
+				managedServerOrigin: 'https://local.preview.example.test:3001'
+			}),
+			'https://local.preview.example.test:4821/app/projects?tab=overview#details'
+		);
+	});
+
 	test('detects preview URL templates that still require a port assignment', () => {
 		assert.strictEqual(hasWorkbenchAppPreviewPortTemplate('http://127.0.0.1:${PORT}/'), true);
 		assert.strictEqual(hasWorkbenchAppPreviewPortTemplate('file:///tmp/index.html'), false);
@@ -1103,11 +1225,11 @@ suite('Workbench App Preview', () => {
 	});
 
 	test('detects whether a process cwd belongs to the repo root', () => {
-		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/acs-schedule', '/Users/dev/repos/acs-schedule'), true);
-		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/acs-schedule/apps/demo', '/Users/dev/repos/acs-schedule'), true);
-		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/acs-schedule/', '/Users/dev/repos/acs-schedule'), true);
-		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/other-project', '/Users/dev/repos/acs-schedule'), false);
-		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/acs-schedule-other', '/Users/dev/repos/acs-schedule'), false);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app/apps/demo', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app/', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/other-project', '/Users/dev/repos/example-app'), false);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app-other', '/Users/dev/repos/example-app'), false);
 	});
 
 	test('classifies terminal startup failures', () => {
@@ -1208,7 +1330,7 @@ suite('Workbench App Preview', () => {
 		}), false);
 		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
 			previewStartupInProgress: true,
-			errorUrl: 'https://local.acc-qa.autodesk.com:3001/',
+			errorUrl: 'https://local.preview.example.test:3001/',
 			errorCode: -102,
 		}), false);
 	});

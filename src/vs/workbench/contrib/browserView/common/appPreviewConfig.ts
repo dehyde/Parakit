@@ -59,6 +59,7 @@ export interface IWorkbenchAppPreviewDevConfigTarget {
 	cwd?: string;
 	portEnv?: string;
 	url?: string;
+	healthUrl?: string;
 	healthPath?: string;
 }
 
@@ -73,8 +74,12 @@ export interface IResolvedWorkbenchAppPreviewDevConfig {
 	cwd?: string;
 	portEnv?: string;
 	url: string;
+	healthUrl?: string;
 	healthPath?: string;
 	fixedPort?: number;
+	previewUrl?: string;
+	previewSource?: WorkbenchAppPreviewTargetPreviewSource;
+	allowSelfSignedLocalHttps?: boolean;
 	installCommand?: string;
 	corepackInstallCommand?: string;
 	dependencyReadiness?: 'ready' | 'missing' | 'stale';
@@ -85,6 +90,33 @@ export interface IWorkbenchAppPreviewResolvedServer {
 	env: Record<string, string>;
 	url: string;
 	healthUrl: string;
+}
+
+export type WorkbenchAppPreviewTargetPreviewSource = 'server' | 'config' | 'frameworkOpen' | 'advertised';
+
+export interface IWorkbenchAppPreviewResolvedTarget {
+	readonly process: {
+		readonly command: string;
+		readonly cwd?: string;
+		readonly env: Record<string, string>;
+	};
+	readonly port: {
+		readonly mode: 'assigned' | 'fixed';
+		readonly value: number;
+		readonly env?: string;
+	};
+	readonly server: {
+		readonly url: string;
+		readonly origin: string;
+		readonly allowSelfSignedLocalHttps: boolean;
+	};
+	readonly health: {
+		readonly url: string;
+	};
+	readonly preview: {
+		readonly url: string;
+		readonly source: WorkbenchAppPreviewTargetPreviewSource;
+	};
 }
 
 export interface IWorkbenchAppPreviewBranchRuntime {
@@ -191,6 +223,19 @@ export interface IWorkbenchAppPreviewHeuristicPackageManagerConfig {
 	readonly installCommand?: string;
 	readonly corepackInstallCommand?: string;
 	readonly dependencyReadiness?: 'ready' | 'missing' | 'stale';
+}
+
+export interface IWorkbenchAppPreviewFrameworkDevServerConfig {
+	readonly host?: string;
+	readonly fixedPort?: number;
+	readonly portEnv?: string;
+	readonly protocol?: 'http' | 'https';
+	readonly openUrl?: string;
+	readonly allowSelfSignedLocalHttps?: boolean;
+}
+
+export interface IWorkbenchAppPreviewUrlPortAdaptPolicy {
+	readonly managedServerOrigin?: string;
 }
 
 export type WorkbenchAppPreviewTerminalFailure = 'portConflict' | 'missingBinary' | 'moduleNotFound' | 'permissionDenied' | 'unknown';
@@ -330,6 +375,21 @@ export function resolveWorkbenchAppPreviewPreferredUrl(candidates: IWorkbenchApp
 	});
 
 	return resolved ?? (duplicateDiscoveredRunningServerUrl ? candidates.runningServerUrl?.trim() || undefined : undefined);
+}
+
+export interface IWorkbenchAppPreviewAdvertisedNavigationUrlPolicy {
+	readonly advertisedUrl: string;
+	readonly previewUrl?: string;
+	readonly previewSource?: WorkbenchAppPreviewTargetPreviewSource;
+}
+
+export function resolveWorkbenchAppPreviewAdvertisedNavigationUrl(policy: IWorkbenchAppPreviewAdvertisedNavigationUrlPolicy): string {
+	const previewUrl = policy.previewUrl?.trim();
+	if (previewUrl && (policy.previewSource === 'frameworkOpen' || policy.previewSource === 'config')) {
+		return previewUrl;
+	}
+
+	return policy.advertisedUrl.trim();
 }
 
 function areWorkbenchAppPreviewUrlsEqual(first: string | undefined, second: string | undefined): boolean {
@@ -763,6 +823,7 @@ export function resolveWorkbenchAppPreviewDevConfig(config: IWorkbenchAppPreview
 		cwd: target.cwd,
 		portEnv: target.portEnv?.trim() || undefined,
 		url: target.url?.trim() || DEFAULT_DEV_URL_TEMPLATE,
+		...(target.healthUrl?.trim() ? { healthUrl: target.healthUrl.trim() } : {}),
 		healthPath: target.healthPath,
 	};
 }
@@ -807,7 +868,35 @@ export function getWorkbenchAppPreviewDevConfigFixedPort(config: IResolvedWorkbe
 	return config.fixedPort ?? getWorkbenchAppPreviewUrlFixedPort(config.url);
 }
 
-export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv, packageManager?: IWorkbenchAppPreviewHeuristicPackageManagerConfig): IResolvedWorkbenchAppPreviewDevConfig | undefined {
+function isWorkbenchAppPreviewRsbuildScript(script: string): boolean {
+	return /\brsbuild(?:\s|$)/.test(script.trim().toLowerCase());
+}
+
+function getWorkbenchAppPreviewFrameworkServerUrl(frameworkConfig: IWorkbenchAppPreviewFrameworkDevServerConfig): string {
+	const protocol = frameworkConfig.protocol ?? 'http';
+	const host = frameworkConfig.host ?? LOOPBACK_PREVIEW_HOST;
+	const port = frameworkConfig.fixedPort ?? '${PORT}';
+	return `${protocol}://${host}:${port}/`;
+}
+
+function createWorkbenchAppPreviewFrameworkDevConfig(scriptName: string, scriptCommandPrefix: string, corepackScriptCommandPrefix: string | undefined, frameworkConfig: IWorkbenchAppPreviewFrameworkDevServerConfig, installCommand: string | undefined, corepackInstallCommand: string | undefined, dependencyReadiness: 'ready' | 'missing' | 'stale' | undefined): IResolvedWorkbenchAppPreviewDevConfig {
+	const command = `${scriptCommandPrefix} ${scriptName}`;
+	return {
+		command,
+		...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}` } : {}),
+		portEnv: frameworkConfig.portEnv ?? (frameworkConfig.fixedPort === undefined ? DEFAULT_DEV_PORT_ENV : undefined),
+		url: getWorkbenchAppPreviewFrameworkServerUrl(frameworkConfig),
+		healthPath: '/',
+		...(frameworkConfig.fixedPort !== undefined ? { fixedPort: frameworkConfig.fixedPort } : {}),
+		...(frameworkConfig.openUrl ? { previewUrl: frameworkConfig.openUrl, previewSource: 'frameworkOpen' as const } : {}),
+		...(frameworkConfig.allowSelfSignedLocalHttps !== undefined ? { allowSelfSignedLocalHttps: frameworkConfig.allowSelfSignedLocalHttps } : {}),
+		...(installCommand ? { installCommand } : {}),
+		...(corepackInstallCommand ? { corepackInstallCommand } : {}),
+		...(installCommand && dependencyReadiness ? { dependencyReadiness } : {}),
+	};
+}
+
+export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv, packageManager?: IWorkbenchAppPreviewHeuristicPackageManagerConfig, frameworkConfig?: IWorkbenchAppPreviewFrameworkDevServerConfig): IResolvedWorkbenchAppPreviewDevConfig | undefined {
 	if (!scripts) {
 		return undefined;
 	}
@@ -824,6 +913,9 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	for (const scriptName of ['dev', 'start:ci', 'start', 'serve']) {
 		const script = scripts[scriptName];
 		if (typeof script === 'string') {
+			if (frameworkConfig && isWorkbenchAppPreviewRsbuildScript(script)) {
+				return createWorkbenchAppPreviewFrameworkDevConfig(scriptName, scriptCommandPrefix, corepackScriptCommandPrefix, frameworkConfig, installCommand, corepackInstallCommand, packageManager?.dependencyReadiness);
+			}
 			const fixedPort = configuredFixedPort ?? getWorkbenchAppPreviewScriptFixedPort(script);
 			const scriptArgs = getWorkbenchAppPreviewDevServerScriptArgs(script);
 			return {
@@ -841,6 +933,108 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	}
 
 	return undefined;
+}
+
+function extractWorkbenchAppPreviewObjectLiteralBlock(content: string, propertyName: string): string | undefined {
+	const match = new RegExp(`\\b${propertyName}\\s*:\\s*\\{`).exec(content);
+	if (!match) {
+		return undefined;
+	}
+
+	let depth = 0;
+	let quote: string | undefined;
+	let escaped = false;
+	const start = match.index + match[0].lastIndexOf('{');
+	for (let index = start; index < content.length; index++) {
+		const char = content[index];
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === '\\') {
+				escaped = true;
+			} else if (char === quote) {
+				quote = undefined;
+			}
+			continue;
+		}
+
+		if (char === '\'' || char === '"' || char === '`') {
+			quote = char;
+			continue;
+		}
+		if (char === '{') {
+			depth++;
+		} else if (char === '}') {
+			depth--;
+			if (depth === 0) {
+				return content.slice(start + 1, index);
+			}
+		}
+	}
+
+	return undefined;
+}
+
+function getWorkbenchAppPreviewLiteralProperty(block: string, propertyName: string): string | undefined {
+	const match = new RegExp(`\\b${propertyName}\\s*:\\s*(['"\`])([^'"\`]+)\\1`).exec(block);
+	return match?.[2]?.trim() || undefined;
+}
+
+function hasWorkbenchAppPreviewProperty(block: string, propertyName: string): boolean {
+	return new RegExp(`\\b${propertyName}\\s*:`).test(block);
+}
+
+function getWorkbenchAppPreviewRsbuildPort(block: string): { fixedPort?: number; portEnv?: string } | undefined {
+	const envFallbackMatch = /\bport\s*:\s*(?:Number\s*\(\s*)?process\.env\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?\s*(?:\|\||\?\?)\s*([0-9]{1,5})/.exec(block);
+	if (envFallbackMatch) {
+		const fixedPort = parseWorkbenchAppPreviewPort(envFallbackMatch[2]);
+		return fixedPort === undefined ? undefined : { fixedPort, portEnv: envFallbackMatch[1] };
+	}
+
+	const literalMatch = /\bport\s*:\s*([0-9]{1,5})\b/.exec(block);
+	if (literalMatch) {
+		const fixedPort = parseWorkbenchAppPreviewPort(literalMatch[1]);
+		return fixedPort === undefined ? undefined : { fixedPort };
+	}
+
+	return hasWorkbenchAppPreviewProperty(block, 'port') ? undefined : {};
+}
+
+export function parseWorkbenchAppPreviewRsbuildConfig(content: string): IWorkbenchAppPreviewFrameworkDevServerConfig | undefined {
+	const serverBlock = extractWorkbenchAppPreviewObjectLiteralBlock(content, 'server');
+	if (!serverBlock) {
+		return undefined;
+	}
+
+	const host = getWorkbenchAppPreviewLiteralProperty(serverBlock, 'host');
+	if (!host && hasWorkbenchAppPreviewProperty(serverBlock, 'host')) {
+		return undefined;
+	}
+
+	const openUrl = getWorkbenchAppPreviewLiteralProperty(serverBlock, 'open');
+	if (!openUrl && hasWorkbenchAppPreviewProperty(serverBlock, 'open')) {
+		return undefined;
+	}
+
+	const port = getWorkbenchAppPreviewRsbuildPort(serverBlock);
+	if (!port) {
+		return undefined;
+	}
+
+	const httpsMatch = /\bhttps\s*:\s*(true|\{)/.exec(serverBlock);
+	const protocol = httpsMatch ? 'https' : 'http';
+	if (!host && !openUrl && port.fixedPort === undefined && !httpsMatch) {
+		return undefined;
+	}
+
+	return {
+		...(host ? { host } : {}),
+		...(port.fixedPort !== undefined ? { fixedPort: port.fixedPort } : {}),
+		...(port.portEnv ? { portEnv: port.portEnv } : {}),
+		protocol,
+		...(openUrl ? { openUrl } : {}),
+		allowSelfSignedLocalHttps: protocol === 'https' && isWorkbenchAppPreviewLocalHost(host ?? LOOPBACK_PREVIEW_HOST),
+	};
 }
 
 function getWorkbenchAppPreviewScriptFixedPort(script: string): number | undefined {
@@ -945,26 +1139,68 @@ export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string, ini
 	};
 }
 
-export function applyWorkbenchAppPreviewDevPort(config: IResolvedWorkbenchAppPreviewDevConfig, port: number): IWorkbenchAppPreviewResolvedServer {
-	const portValue = String(port);
+export function resolveWorkbenchAppPreviewDevServerTarget(config: IResolvedWorkbenchAppPreviewDevConfig, port: number, cwd?: string): IWorkbenchAppPreviewResolvedTarget {
+	const effectivePort = config.fixedPort ?? port;
+	const portValue = String(effectivePort);
 	const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, portValue);
 	const url = replacePort(config.url);
-	const healthUrl = config.healthPath ? new URL(config.healthPath, url).toString() : url;
+	const healthUrl = config.healthUrl ? replacePort(config.healthUrl) : config.healthPath ? new URL(config.healthPath, url).toString() : url;
+	const previewUrl = config.previewUrl ? replacePort(config.previewUrl) : url;
+	const origin = new URL(url).origin;
 	return {
-		command: replacePort(config.command),
-		// CRA, webpack, and Vite honor BROWSER=none. Rsbuild may log a benign failed launch for
-		// a browser named "none", but it still prevents the OS-level browser from opening.
-		env: { BROWSER: 'none', ...(config.portEnv ? { [config.portEnv]: portValue } : {}) },
-		url,
-		healthUrl,
+		process: {
+			command: replacePort(config.command),
+			...(cwd ? { cwd } : {}),
+			// CRA, webpack, and Vite honor BROWSER=none. Rsbuild may log a benign failed launch for
+			// a browser named "none", but it still prevents the OS-level browser from opening.
+			env: { BROWSER: 'none', ...(config.portEnv ? { [config.portEnv]: portValue } : {}) },
+		},
+		port: {
+			mode: config.fixedPort === undefined ? 'assigned' : 'fixed',
+			value: effectivePort,
+			...(config.portEnv ? { env: config.portEnv } : {}),
+		},
+		server: {
+			url,
+			origin,
+			allowSelfSignedLocalHttps: config.allowSelfSignedLocalHttps ?? false,
+		},
+		health: { url: healthUrl },
+		preview: {
+			url: previewUrl,
+			source: config.previewSource ?? 'server',
+		},
 	};
 }
 
-export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port: number | undefined): string | undefined {
+export function applyWorkbenchAppPreviewDevPort(config: IResolvedWorkbenchAppPreviewDevConfig, port: number): IWorkbenchAppPreviewResolvedServer {
+	const target = resolveWorkbenchAppPreviewDevServerTarget(config, port);
+	return {
+		command: target.process.command,
+		env: target.process.env,
+		url: target.server.url,
+		healthUrl: target.health.url,
+	};
+}
+
+function shouldAdaptWorkbenchAppPreviewParsedUrlToPort(parsed: URL, policy: IWorkbenchAppPreviewUrlPortAdaptPolicy | undefined): boolean {
+	if (policy?.managedServerOrigin) {
+		try {
+			return parsed.origin === new URL(policy.managedServerOrigin).origin;
+		} catch {
+			return false;
+		}
+	}
+
+	return isWorkbenchAppPreviewLocalHost(parsed.hostname);
+}
+
+export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port: number | undefined, policy?: IWorkbenchAppPreviewUrlPortAdaptPolicy): string | undefined {
 	if (!url || !port) {
 		return url;
 	}
 
+	const hadPortTemplate = url.includes('${PORT}');
 	const concreteUrl = url.replace(/\$\{PORT\}/g, String(port));
 	let parsed: URL;
 	try {
@@ -977,7 +1213,9 @@ export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port:
 		return url;
 	}
 
-	parsed.port = String(port);
+	if (hadPortTemplate || shouldAdaptWorkbenchAppPreviewParsedUrlToPort(parsed, policy)) {
+		parsed.port = String(port);
+	}
 	return parsed.href;
 }
 

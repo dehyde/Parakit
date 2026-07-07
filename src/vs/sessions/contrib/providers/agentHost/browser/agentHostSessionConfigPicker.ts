@@ -73,6 +73,7 @@ registerAction2(class extends Action2 {
 });
 
 export interface IConfigPickerItem {
+	readonly id?: string;
 	readonly value: string;
 	readonly label: string;
 	readonly description?: string;
@@ -109,7 +110,7 @@ function toActionItems(property: string, items: readonly IConfigPickerItem[], cu
 		detail: item.description,
 		group: { title: '', icon: getConfigIcon(property, item.value) },
 		disabled: policyRestricted && (item.value === 'autoApprove' || item.value === 'autopilot'),
-		item: { ...item, label: isSelectedValue(currentValue, item.value) ? `${item.label} ${localize('selected', "(Selected)")}` : item.label },
+		item: { ...item, id: item.id ?? item.value, label: isSelectedValue(currentValue, item.value) ? `${item.label} ${localize('selected', "(Selected)")}` : item.label },
 	}));
 }
 
@@ -238,12 +239,23 @@ function applyAutoApproveTriggerStyles(trigger: HTMLElement, property: string | 
 	}
 }
 
+interface IVisibleSessionConfigPicker {
+	readonly provider: IAgentHostSessionsProvider;
+	readonly sessionId: string;
+	readonly property: string;
+	readonly schema: SessionConfigPropertySchema;
+	readonly trigger: HTMLElement;
+	query?: string;
+}
+
 export class AgentHostSessionConfigPicker extends Disposable {
 
 	protected readonly _renderDisposables = this._register(new DisposableStore());
 	private readonly _providerListeners = this._register(new DisposableMap<string>());
 	protected readonly _filterDelayer = this._register(new Delayer<readonly IActionListItem<IConfigPickerItem>[]>(200));
 	private _container: HTMLElement | undefined;
+	private _visiblePicker: IVisibleSessionConfigPicker | undefined;
+	private _visiblePickerRefreshGeneration = 0;
 
 	constructor(
 		protected readonly _session: IObservable<IActiveSession | undefined>,
@@ -278,8 +290,20 @@ export class AgentHostSessionConfigPicker extends Disposable {
 			if (!isAgentHostProvider(provider) || this._providerListeners.has(provider.id)) {
 				continue;
 			}
-			this._providerListeners.set(provider.id, provider.onDidChangeSessionConfig(() => this._renderConfigPickers()));
+			this._providerListeners.set(provider.id, provider.onDidChangeSessionConfig(sessionId => this._onProviderSessionConfigChanged(provider, sessionId)));
 		}
+	}
+
+	private _onProviderSessionConfigChanged(provider: IAgentHostSessionsProvider, sessionId: string): void {
+		const visiblePicker = this._visiblePicker;
+		if (visiblePicker && this._actionWidgetService.isVisible && visiblePicker.provider.id === provider.id) {
+			if (visiblePicker.sessionId === sessionId) {
+				void this._refreshVisiblePicker(visiblePicker);
+			}
+			return;
+		}
+
+		this._renderConfigPickers();
 	}
 
 	render(container: HTMLElement): void {
@@ -452,6 +476,7 @@ export class AgentHostSessionConfigPicker extends Disposable {
 		const currentValue = provider.getSessionConfig(sessionId)?.values[property];
 		const currentItem = items.find(i => i.value === currentValue);
 		const actionItems = toActionItems(property, items, currentValue, policyRestricted);
+		const visiblePicker: IVisibleSessionConfigPicker = { provider, sessionId, property, schema, trigger };
 
 		const delegate: IActionListDelegate<IConfigPickerItem> = {
 			onSelect: async item => {
@@ -479,14 +504,24 @@ export class AgentHostSessionConfigPicker extends Disposable {
 			},
 			onFilter: schema.enumDynamic
 				? query => this._filterDelayer.trigger(async () => {
+					if (this._visiblePicker === visiblePicker) {
+						visiblePicker.query = query;
+					}
 					const filteredRawItems = await this._getItems(provider, sessionId, property, schema, query);
 					const { items: filteredItems, policyRestricted: filteredPolicyRestricted } = applyAutoApproveFiltering(filteredRawItems, property, this._configurationService);
 					return toActionItems(property, filteredItems, provider.getSessionConfig(sessionId)?.values[property], filteredPolicyRestricted);
 				})
 				: undefined,
-			onHide: () => trigger.focus(),
+			onHide: () => {
+				if (this._visiblePicker === visiblePicker) {
+					this._visiblePicker = undefined;
+					this._visiblePickerRefreshGeneration++;
+				}
+				trigger.focus();
+			},
 		};
 
+		this._visiblePicker = visiblePicker;
 		this._actionWidgetService.show<IConfigPickerItem>(
 			`agentHostSessionConfig.${property}`,
 			false,
@@ -499,8 +534,41 @@ export class AgentHostSessionConfigPicker extends Disposable {
 				getAriaLabel: item => item.label ?? '',
 				getWidgetAriaLabel: () => localize('agentHostSessionConfig.ariaLabel', "{0} Picker", schema.title),
 			},
-			actionItems.length > 10 ? { showFilter: true, filterPlaceholder: localize('agentHostSessionConfig.filter', "Filter options...") } : undefined,
+			schema.enumDynamic || actionItems.length > 10 ? { showFilter: true, filterPlaceholder: localize('agentHostSessionConfig.filter', "Filter options..."), ...(schema.enumDynamic ? { focusFilterOnOpen: true } : {}) } : undefined,
 		);
+	}
+
+	private async _refreshVisiblePicker(visiblePicker: IVisibleSessionConfigPicker): Promise<void> {
+		const refreshGeneration = ++this._visiblePickerRefreshGeneration;
+		const schema = this._getCompatibleVisiblePickerSchema(visiblePicker);
+		if (!schema) {
+			this._actionWidgetService.hide(true);
+			this._renderConfigPickers();
+			return;
+		}
+
+		const rawItems = await this._getItems(visiblePicker.provider, visiblePicker.sessionId, visiblePicker.property, schema, visiblePicker.query);
+		if (refreshGeneration !== this._visiblePickerRefreshGeneration || this._visiblePicker !== visiblePicker || !this._actionWidgetService.isVisible) {
+			return;
+		}
+
+		const { items, policyRestricted } = applyAutoApproveFiltering(rawItems, visiblePicker.property, this._configurationService);
+		this._actionWidgetService.updateItems(toActionItems(visiblePicker.property, items, visiblePicker.provider.getSessionConfig(visiblePicker.sessionId)?.values[visiblePicker.property], policyRestricted));
+	}
+
+	private _getCompatibleVisiblePickerSchema(visiblePicker: IVisibleSessionConfigPicker): SessionConfigPropertySchema | undefined {
+		const config = visiblePicker.provider.getSessionConfig(visiblePicker.sessionId);
+		const schema = config?.schema.properties[visiblePicker.property];
+		if (!schema || schema.type !== visiblePicker.schema.type || !!schema.enumDynamic !== !!visiblePicker.schema.enumDynamic || !this._isPickable(schema)) {
+			return undefined;
+		}
+
+		const isNewSession = visiblePicker.provider.getCreateSessionConfig(visiblePicker.sessionId) !== undefined;
+		if (!this._shouldRenderProperty(visiblePicker.property, schema, isNewSession) || this._isReadOnlyChip(visiblePicker.property, schema, isNewSession)) {
+			return undefined;
+		}
+
+		return schema;
 	}
 
 	protected async _getItems(provider: IAgentHostSessionsProvider, sessionId: string, property: string, schema: SessionConfigPropertySchema, query?: string): Promise<readonly IConfigPickerItem[]> {

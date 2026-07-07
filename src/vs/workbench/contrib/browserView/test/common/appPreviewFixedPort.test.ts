@@ -10,7 +10,7 @@ import { resolveWorkbenchAppPreviewFixedPortAction } from '../../common/appPrevi
 suite('AppPreviewFixedPort', () => {
 	ensureNoDisposablesAreLeakedInTestSuite();
 
-	const root = '/Users/dev/repos/acs-schedule';
+	const root = '/Users/dev/repos/example-app';
 
 	test('a free port is ready to bind immediately', () => {
 		assert.strictEqual(
@@ -40,11 +40,11 @@ suite('AppPreviewFixedPort', () => {
 		);
 	});
 
-	test('a foreign owner from a different repo is closed (the observed incident)', () => {
+	test('a foreign owner from a different repo is closed', () => {
 		assert.strictEqual(
 			resolveWorkbenchAppPreviewFixedPortAction({
 				portFree: false,
-				owner: { pid: 16453, cwd: '/Users/dev/projects/acs-sc-web-platform/apps/demo' },
+				owner: { pid: 16453, cwd: '/Users/dev/projects/other-app/apps/demo' },
 				rootPath: root,
 			}),
 			'closeForeign',
