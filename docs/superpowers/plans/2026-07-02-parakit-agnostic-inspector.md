@@ -13,7 +13,7 @@
 - Never hardcode or assume any specific design system, component library, framework, or company name anywhere in this code — all detection/resolution must work on any web app. This is a hard product requirement, not a style preference.
 - Match existing code style exactly: `async fn(...): Promise<ConcreteType>` (never `Promise<any>`), cast `sendCommand`'s `unknown` result inline at the call site (`as { ... }`), fatal failures `throw new Error('...')`, non-fatal failures `try { } catch { }` or `.catch(() => fallback)`.
 - No `any`, no `!` non-null assertions, no `@ts-ignore`.
-- Every Promise must be handled (`.catch(...)` or `try/catch`) — this repo enforces it the same way the ACS repo's ESLint strict config does.
+- Every Promise must be handled (`.catch(...)` or `try/catch`) — this repo enforces it the same way strict downstream ESLint configs do.
 - Test runner for anything under `src/vs/.../test/electron-browser/` or `test/electron-main/`: `./scripts/test.sh --run <path-to-test-file>` (add `--grep "<name>"` to narrow further). This spins up a real Electron build, so it is slower than a plain Node test — run it once per task, not after every micro-edit.
 - Do not reformat or restructure files beyond the lines a task actually changes.
 - Every new field added to a shared interface (`IElementData` etc.) must be optional (`readonly foo?:`) so existing callers that construct these objects (tests, other call sites) keep compiling untouched.

@@ -4,7 +4,7 @@
 **Branch:** `design/parakit-preview-reliability` (PR #3). Do all work here; one commit per task.
 **Status of prior work (already shipped on this branch — do NOT redo):** fixed-port ownership pre-flight with auto-close, and render-aware health (`resolveWorkbenchAppPreviewHealthFromSignals` + the `reachable` state). These are the foundation the tasks below build on.
 
-> **Prime directive: no regressions.** The single most important repo — `acs-schedule` — already works today. Nothing in this plan may break it. See [§3 Regression Safety](#3-regression-safety) and run the [§4 Regression Test Matrix](#4-regression-test-matrix) before every merge.
+> **Prime directive: no regressions.** The single most important baseline repo — `schedule-app` — already works today. Nothing in this plan may break it. See [§3 Regression Safety](#3-regression-safety) and run the [§4 Regression Test Matrix](#4-regression-test-matrix) before every merge.
 
 ---
 
@@ -34,7 +34,7 @@
 | [A3](#a3) | "Default URL not set" flash on switch | easy–moderate | low | R1 R3 R4 |
 | [A4](#a4) | 5-min install looks frozen (feedback) | easy | low | R3 |
 | [B1](#b1) | Unnecessary reinstall on branch switch | medium | medium | R2 R3 R5 |
-| [B2](#b2) | ACS `local.*` host not treated as local → won't route into preview tab / weak health | medium | medium (platform) | R1 R2 R3 |
+| [B2](#b2) | `local.*` loopback-alias host not treated as local → won't route into preview tab / weak health | medium | medium (platform) | R1 R2 R3 |
 | [B3](#b3) | ~10s Chromium error screen on switch | medium | medium | R1 R2 R5 |
 | [C1](#c1) | `running` set before server verified | medium | medium | R1 R2 R3 |
 | [C2](#c2) | No terminal state for "up but never rendered" | medium | medium | R3 |
@@ -49,7 +49,7 @@ These principles are **binding** for every task. Reviewers must reject changes t
 
 3.a — **Fail-open.** A new check that cannot determine its answer (e.g. a render probe that can't run, a port owner that can't be read) must fall back to today's behavior — never to a harder failure. Precedent: the shipped render probe treats "can't probe" as "don't block".
 
-3.b — **Preserve the happy path.** `acs-schedule` (R1) uses a **no-op command** (`"command": "sleep 86400"`), a **pre-configured** `https://local.acc-qa.autodesk.com:3001/` URL, and `healthPath: "/health"`. It works today. Every change must keep it: loads in the preview tab, health passes, no reinstall, no external browser, no error/flash screens.
+3.b — **Preserve the happy path.** `schedule-app` (R1) uses a **no-op command** (`"command": "sleep 86400"`), a **pre-configured** `https://local.preview.example.test:3001/` URL, and `healthPath: "/health"`. It works today. Every change must keep it: loads in the preview tab, health passes, no reinstall, no external browser, no error/flash screens.
 
 3.c — **Additive over destructive.** Prefer adding a fallback branch or a new state to rewriting an existing branch. Example: A3 adds a last-resort fallback rather than changing the resolver's ordering.
 
@@ -69,7 +69,7 @@ These principles are **binding** for every task. Reviewers must reject changes t
 
 Re-run the rows listed in each task's "Must re-test" column. R1 is the golden baseline and is re-run for almost everything.
 
-4.R1 — **acs-schedule (golden baseline).** No-op command (`sleep 86400`), pre-configured `local.acc-qa.autodesk.com:3001` URL, `/health`. Expected: opens in the preview tab, health passes, no external browser, no reinstall, no error/flash screens. **Must remain identical.**
+4.R1 — **schedule-app (golden baseline).** No-op command (`sleep 86400`), pre-configured `local.preview.example.test:3001` URL, `/health`. Expected: opens in the preview tab, health passes, no external browser, no reinstall, no error/flash screens. **Must remain identical.**
 4.R2 — **Localhost managed repo.** rsbuild/CRA on `localhost:PORT`, has a `start` script, dependencies already installed. Expected: server starts, loads internally, no external browser, no reinstall on second open.
 4.R3 — **No-config managed repo (cold).** Needs configuration, `node_modules` absent. Expected: install shows the "can take a few minutes" feedback, then loads internally; no external browser; no "Default URL not set" flash.
 4.R4 — **Repo with a saved default-URL override.** Expected: the override is honored (A3/C4 must not override the override).
@@ -155,17 +155,17 @@ B1.e — **Verify (manual, R5):** install once, then switch branches back and fo
 B1.f — **Regression risk:** medium — a wrong "ready" skips a needed install. **Mitigation:** only trust the hash marker when `node_modules` actually exists; fall back to mtime otherwise. R2/R3 confirm real installs still run when needed.
 
 <a id="b2"></a>
-### B2 — Recognize ACS loopback-alias hosts (`local.*`) as local dev URLs
+### B2 — Recognize loopback-alias hosts (`local.*`) as local dev URLs
 
-B2.a — **Why (shared root cause):** ACS uses `local.acc-qa.autodesk.com:PORT` — a hostname that resolves to loopback but carries a real domain for auth cookies. The fork already has a `local.`-aware predicate, `isWorkbenchAppPreviewLocalHost` (`appPreviewConfig.ts:344`), but the health-fetch-mode and the browser-view link router use the **strict** localhost check. So ACS URLs are treated as "foreign": links route to a separate tab instead of the App Preview tab, and health takes the weak path.
+B2.a — **Why (shared root cause):** some enterprise apps use `local.preview.example.test:PORT` — a hostname that resolves to loopback but carries a real domain for auth cookies. The fork already has a `local.`-aware predicate, `isWorkbenchAppPreviewLocalHost` (`appPreviewConfig.ts:344`), but the health-fetch-mode and the browser-view link router use the **strict** localhost check. So these URLs are treated as "foreign": links route to a separate tab instead of the App Preview tab, and health takes the weak path.
 B2.b — **Change 1 (health):** `appPreviewConfig.ts` → `getWorkbenchAppPreviewHealthFetchMode` (line 225): use `isWorkbenchAppPreviewLocalHost(parsed.hostname)` instead of `isWorkbenchAppPreviewLoopbackHost`. Export `isWorkbenchAppPreviewLocalHost` if needed.
-B2.c — **Change 2 (routing):** `platform/browserView/common/browserView.ts` → `isBrowserViewLocalHttpUrl` (264) / `isBrowserViewLocalOrAllInterfacesHttpUrl` (277): also accept a `local.`-prefixed https host so `getBrowserViewExternalLinkAction` returns `openAppPreview` for ACS URLs when a preview exists.
-B2.d — **Blast-radius note (critical for review):** `browserView.ts` is platform-shared. Scope the change to the browser-view predicates only; do **not** touch `trustedDomains.isLocalhostAuthority`. Add a comment explaining the ACS loopback-alias rationale. There is precedent — `isWorkbenchAppPreviewLocalHost` already treats `local.*` as local — so this is consistency, not a new heuristic.
+B2.c — **Change 2 (routing):** `platform/browserView/common/browserView.ts` → `isBrowserViewLocalHttpUrl` (264) / `isBrowserViewLocalOrAllInterfacesHttpUrl` (277): also accept a `local.`-prefixed https host so `getBrowserViewExternalLinkAction` returns `openAppPreview` for loopback-alias URLs when a preview exists.
+B2.d — **Blast-radius note (critical for review):** `browserView.ts` is platform-shared. Scope the change to the browser-view predicates only; do **not** touch `trustedDomains.isLocalhostAuthority`. Add a comment explaining the loopback-alias rationale. There is precedent — `isWorkbenchAppPreviewLocalHost` already treats `local.*` as local — so this is consistency, not a new heuristic.
 B2.e — **Tests:**
-- B2.e.1 — `test/common/appPreviewUrl.test.ts`: `getWorkbenchAppPreviewHealthFetchMode('https://local.acc-qa.autodesk.com:3001/')` returns `'no-cors'`; a plain `https://acc-qa.autodesk.com/` (no `local.`) still returns `'cors'`.
-- B2.e.2 — a `browserView` test: `getBrowserViewExternalLinkAction({ targetUrl:'https://local.acc-qa.autodesk.com:3001/x', hasAppPreview:true, openLocalhostLinks:false })` returns `'openAppPreview'`; a genuinely external `https://example.com/` still returns `'openInternal'`/`'allowExternal'` as before.
-B2.f — **Verify (manual, R1/R2):** in an ACS repo, a same-host link/redirect lands in the App Preview tab, not a new tab or the external browser; R1 health still passes.
-B2.g — **Regression risk:** medium — anything served from a `local.*` host is now treated as local. Given the existing precedent, this is consistent; still, call it out for review and confirm no non-ACS `local.*` usage is affected.
+- B2.e.1 — `test/common/appPreviewUrl.test.ts`: `getWorkbenchAppPreviewHealthFetchMode('https://local.preview.example.test:3001/')` returns `'no-cors'`; a plain `https://preview.example.test/` (no `local.`) still returns `'cors'`.
+- B2.e.2 — a `browserView` test: `getBrowserViewExternalLinkAction({ targetUrl:'https://local.preview.example.test:3001/x', hasAppPreview:true, openLocalhostLinks:false })` returns `'openAppPreview'`; a genuinely external `https://example.com/` still returns `'openInternal'`/`'allowExternal'` as before.
+B2.f — **Verify (manual, R1/R2):** in a loopback-alias repo, a same-host link/redirect lands in the App Preview tab, not a new tab or the external browser; R1 health still passes.
+B2.g — **Regression risk:** medium — anything served from a `local.*` host is now treated as local. Given the existing precedent, this is consistent; still, call it out for review and confirm no unrelated `local.*` usage is affected.
 
 <a id="b3"></a>
 ### B3 — Kill the ~10s Chromium "problem loading page" screen on switch
@@ -226,7 +226,7 @@ C4.f — **Regression risk:** low — mostly additive messaging; keep the resolv
 
 Reject or request changes if any of the following is not satisfied. This list is a floor, not a ceiling — apply judgment beyond it.
 
-5.a — **Regression first.** The relevant [§4](#4-regression-test-matrix) rows were re-run and pass, and **R1 (acs-schedule) behaves identically**. If any existing test assertion changed, the PR explains why (per 3.h).
+5.a — **Regression first.** The relevant [§4](#4-regression-test-matrix) rows were re-run and pass, and **R1 (schedule-app) behaves identically**. If any existing test assertion changed, the PR explains why (per 3.h).
 5.b — **Fail-open verified.** For every new check, there is a test proving the "cannot determine" / undefined-input path degrades to prior behavior (per 3.a).
 5.c — **Logic is pure and tested.** New decision logic lives in `appPreviewConfig.ts` (or another pure module) with tests covering happy path, each edge, and the unknown-input case. The controller only wires it (per 3.d).
 5.d — **Blast radius acknowledged.** Any edit under `src/vs/platform/**` (only B2 should have one) is called out explicitly, scoped narrowly, and does not alter shared security predicates like `isLocalhostAuthority`.

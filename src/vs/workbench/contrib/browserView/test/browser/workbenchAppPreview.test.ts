@@ -105,9 +105,9 @@ suite('Workbench App Preview', () => {
 	test('server advertisements keep framework preview URLs as the navigated URL', () => {
 		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
 			advertisedUrl: 'https://local.preview.example.test:3001/',
-			previewUrl: 'https://external-shell.example.test/build/app?infraPreviewPath=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js',
+			previewUrl: 'https://external-shell.example.test/build/app?previewMode=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js',
 			previewSource: 'frameworkOpen',
-		}), 'https://external-shell.example.test/build/app?infraPreviewPath=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js');
+		}), 'https://external-shell.example.test/build/app?previewMode=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js');
 
 		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
 			advertisedUrl: 'https://local.preview.example.test:3001/',

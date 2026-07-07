@@ -6,7 +6,7 @@
 
 ## What Broke
 
-On **July 2, 2026**, the App Preview feature stopped working for projects that previously ran seamlessly — including `designwithai` (has `docs/index.html` ready to show) and `acs-meetings` (dependencies already installed, can start immediately).
+On **July 2, 2026**, the App Preview feature stopped working for projects that previously ran seamlessly — including `designwithai` (has `docs/index.html` ready to show) and `team-dashboard` (dependencies already installed, can start immediately).
 
 Instead of launching, these repos hit a "configure a preview URL" setup screen and do nothing.
 
@@ -38,7 +38,7 @@ The code only implemented cases A and C:
 | **B** | No | ❌ Shows setup screen (should auto-start) |
 | **C** | No | ✅ Shows setup screen (correct) |
 
-**Result:** Case B projects (like `designwithai` and `acs-meetings`) are now treated as Case C, even though they don't need setup.
+**Result:** Case B projects (like `designwithai` and `team-dashboard`) are now treated as Case C, even though they don't need setup.
 
 ---
 

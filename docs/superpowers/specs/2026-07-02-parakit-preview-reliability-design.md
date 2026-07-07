@@ -2,7 +2,7 @@
 
 ## Goal
 
-Reduce App Preview loading time and loading failures, generically — with no logic specific to any particular project (ACC, Forma, or otherwise). The mechanism must work equally well for a tiny toy project and a huge, slow-installing monorepo, using safe generic defaults rather than per-project configuration.
+Reduce App Preview loading time and loading failures, generically — with no logic specific to any particular project, product, company, or framework. The mechanism must work equally well for a tiny toy project and a huge, slow-installing monorepo, using safe generic defaults rather than per-project configuration.
 
 ## Current Behavior & Root Causes
 
