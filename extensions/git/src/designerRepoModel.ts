@@ -9,12 +9,25 @@ export interface DesignerKnownRepo {
 	readonly url?: string;
 }
 
+export type DesignerRepoSource =
+	| { readonly kind: 'remote'; readonly url: string }
+	| { readonly kind: 'localPath'; readonly path: string };
+
+export type DesignerRepoSwitchMode = 'alreadyOpen' | 'saveThenSwitch' | 'switchWithoutSaving';
+
 interface MergeDesignerKnownReposOptions {
 	readonly currentRepo?: DesignerKnownRepo;
 	readonly storedRepos: readonly { readonly path?: string; readonly name?: string; readonly url?: string }[];
 	readonly discoveredRepos: readonly DesignerKnownRepo[];
 	readonly repoToInclude?: DesignerKnownRepo;
 	readonly hiddenRepoPaths: readonly string[];
+}
+
+interface DesignerRepoSwitchModeOptions {
+	readonly currentRepoPath?: string;
+	readonly targetRepoPath: string;
+	readonly currentRepositoryAvailable: boolean;
+	readonly currentRepositoryIsHost: boolean;
 }
 
 export function mergeDesignerKnownRepos(options: MergeDesignerKnownReposOptions): DesignerKnownRepo[] {
@@ -43,8 +56,29 @@ export function mergeDesignerKnownRepos(options: MergeDesignerKnownReposOptions)
 	return repos;
 }
 
+export function getDesignerRepoSwitchMode(options: DesignerRepoSwitchModeOptions): DesignerRepoSwitchMode {
+	if (options.currentRepoPath && pathEquals(options.currentRepoPath, options.targetRepoPath)) {
+		return 'alreadyOpen';
+	}
+
+	if (!options.currentRepoPath || options.currentRepositoryIsHost || !options.currentRepositoryAvailable) {
+		return 'switchWithoutSaving';
+	}
+
+	return 'saveThenSwitch';
+}
+
 export function getDesignerRepoLabel(repoPath: string): string {
 	return repoPath.split(/[\\/]/).filter(Boolean).at(-1) || repoPath;
+}
+
+export function parseDesignerRepoSource(source: string): DesignerRepoSource {
+	const trimmed = source.trim();
+	if (isRemoteRepoSource(trimmed)) {
+		return { kind: 'remote', url: trimmed };
+	}
+
+	return { kind: 'localPath', path: trimTrailingSeparators(trimmed) };
 }
 
 function appendRepo(repos: DesignerKnownRepo[], repo: DesignerKnownRepo | undefined, hiddenRepoPaths: readonly string[], forceInclude: boolean): void {
@@ -76,4 +110,16 @@ function pathEquals(first: string, second: string): boolean {
 
 function normalizePath(repoPath: string): string {
 	return repoPath.replace(/\\/g, '/').toLowerCase();
+}
+
+function isRemoteRepoSource(source: string): boolean {
+	if (/^[a-z][a-z0-9+.-]*:\/\//i.test(source)) {
+		return true;
+	}
+
+	return /^[^@\s]+@[^:\s]+:.+/.test(source);
+}
+
+function trimTrailingSeparators(value: string): string {
+	return value.replace(/[\\/]+$/, '');
 }

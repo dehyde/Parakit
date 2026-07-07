@@ -59,6 +59,7 @@ export interface IWorkbenchAppPreviewDevConfigTarget {
 	cwd?: string;
 	portEnv?: string;
 	url?: string;
+	healthUrl?: string;
 	healthPath?: string;
 }
 
@@ -69,11 +70,19 @@ export interface IWorkbenchAppPreviewDevConfig {
 
 export interface IResolvedWorkbenchAppPreviewDevConfig {
 	command: string;
+	corepackCommand?: string;
 	cwd?: string;
 	portEnv?: string;
 	url: string;
+	healthUrl?: string;
 	healthPath?: string;
 	fixedPort?: number;
+	previewUrl?: string;
+	previewSource?: WorkbenchAppPreviewTargetPreviewSource;
+	allowSelfSignedLocalHttps?: boolean;
+	installCommand?: string;
+	corepackInstallCommand?: string;
+	dependencyReadiness?: 'ready' | 'missing' | 'stale';
 }
 
 export interface IWorkbenchAppPreviewResolvedServer {
@@ -83,9 +92,38 @@ export interface IWorkbenchAppPreviewResolvedServer {
 	healthUrl: string;
 }
 
+export type WorkbenchAppPreviewTargetPreviewSource = 'server' | 'config' | 'frameworkOpen' | 'advertised';
+
+export interface IWorkbenchAppPreviewResolvedTarget {
+	readonly process: {
+		readonly command: string;
+		readonly cwd?: string;
+		readonly env: Record<string, string>;
+	};
+	readonly port: {
+		readonly mode: 'assigned' | 'fixed';
+		readonly value: number;
+		readonly env?: string;
+	};
+	readonly server: {
+		readonly url: string;
+		readonly origin: string;
+		readonly allowSelfSignedLocalHttps: boolean;
+	};
+	readonly health: {
+		readonly url: string;
+	};
+	readonly preview: {
+		readonly url: string;
+		readonly source: WorkbenchAppPreviewTargetPreviewSource;
+	};
+}
+
 export interface IWorkbenchAppPreviewBranchRuntime {
 	readonly port?: number;
 	readonly lastUrl?: string;
+	readonly lastSuccessfulUrl?: string;
+	readonly lastSuccessfulAt?: number;
 }
 
 export interface IWorkbenchAppPreviewCommandAttempt {
@@ -112,10 +150,95 @@ export interface IWorkbenchAppPreviewLoadErrorRecoveryPolicy {
 	readonly activeManagedPreviewUrl?: string | undefined;
 }
 
+export type WorkbenchAppPreviewServerState = 'stopped' | 'starting' | 'running' | 'failed';
+export type WorkbenchAppPreviewHealthState = 'unknown' | 'healthy' | 'reachable' | 'unhealthy';
+
+export interface IWorkbenchAppPreviewLoadErrorRestartPolicy {
+	readonly recoverableLoadError: boolean;
+	readonly serverProcessAlive: boolean;
+	readonly serverState?: WorkbenchAppPreviewServerState;
+}
+
+export interface IWorkbenchAppPreviewLoadEventGatePolicy {
+	readonly eventLoading: boolean;
+	readonly hasError: boolean;
+	readonly previewStartupInProgress: boolean;
+	readonly previewLoadFailureRecoveryInFlight: boolean;
+	readonly serverStartInFlight: boolean;
+}
+
+export interface IWorkbenchAppPreviewLoadErrorOverlayPolicy {
+	readonly previewStartupInProgress: boolean;
+	readonly errorUrl: string | undefined;
+	readonly errorCode: number;
+}
+
+export interface IWorkbenchAppPreviewServerCommandExitPolicy {
+	readonly serverState: WorkbenchAppPreviewServerState;
+	readonly serverHealth: WorkbenchAppPreviewHealthState;
+}
+
+export interface IWorkbenchAppPreviewHealthTimeoutPolicy {
+	readonly serverState: WorkbenchAppPreviewServerState;
+	readonly serverHealth: WorkbenchAppPreviewHealthState;
+	readonly serverTerminalExited: boolean;
+	readonly serverCommandActive?: boolean;
+}
+
+export interface IWorkbenchAppPreviewAutoStartGatePolicy {
+	readonly previewStartupInProgress: boolean;
+	readonly previewAutoStartInFlight: boolean;
+	readonly serverState: WorkbenchAppPreviewServerState;
+}
+
+export interface IWorkbenchAppPreviewInstallOutcomePolicy {
+	readonly serverTerminalExited: boolean;
+	readonly exitCode?: number;
+}
+
+export type WorkbenchAppPreviewInstallOutcome = 'succeeded' | 'crashed' | 'failed';
+
+export interface IWorkbenchAppPreviewServerStartConfigurationPolicy {
+	readonly configuredUrl: string | undefined;
+	readonly inferredStartupUrl?: string | undefined;
+	readonly needsConfigurationPrompt: boolean;
+	readonly hasRunnableServerConfig?: boolean;
+	readonly canStartServerWithoutInstall?: boolean;
+}
+
+export interface IWorkbenchAppPreviewInferredStartupUrlPolicy {
+	readonly port?: number;
+	readonly branchRuntime?: IWorkbenchAppPreviewBranchRuntime;
+	readonly repoRuntimes?: readonly IWorkbenchAppPreviewBranchRuntime[];
+}
+
 export interface IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy {
 	readonly currentServerUrl: string | undefined;
 	readonly advertisedUrl: string;
 }
+
+export interface IWorkbenchAppPreviewHeuristicPackageManagerConfig {
+	readonly scriptCommandPrefix: string;
+	readonly corepackScriptCommandPrefix?: string;
+	readonly installCommand?: string;
+	readonly corepackInstallCommand?: string;
+	readonly dependencyReadiness?: 'ready' | 'missing' | 'stale';
+}
+
+export interface IWorkbenchAppPreviewFrameworkDevServerConfig {
+	readonly host?: string;
+	readonly fixedPort?: number;
+	readonly portEnv?: string;
+	readonly protocol?: 'http' | 'https';
+	readonly openUrl?: string;
+	readonly allowSelfSignedLocalHttps?: boolean;
+}
+
+export interface IWorkbenchAppPreviewUrlPortAdaptPolicy {
+	readonly managedServerOrigin?: string;
+}
+
+export type WorkbenchAppPreviewTerminalFailure = 'portConflict' | 'missingBinary' | 'moduleNotFound' | 'permissionDenied' | 'unknown';
 
 export interface IWorkbenchAppPreviewStartupPageKeyStage {
 	readonly label: string;
@@ -163,7 +286,7 @@ export function normalizeWorkbenchAppPreviewLoopbackUrl(url: string): string {
 export function getWorkbenchAppPreviewHealthFetchMode(url: string): 'cors' | 'no-cors' {
 	try {
 		const parsed = new URL(url);
-		if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLoopbackHost(parsed.hostname)) {
+		if ((parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLocalHost(parsed.hostname)) {
 			return 'no-cors';
 		}
 	} catch {
@@ -171,6 +294,38 @@ export function getWorkbenchAppPreviewHealthFetchMode(url: string): 'cors' | 'no
 	}
 
 	return 'cors';
+}
+
+export interface IWorkbenchAppPreviewHealthSignals {
+	/** The dev server answered an HTTP request (transport reachability). */
+	readonly httpReachable: boolean;
+	/** The preview tab is currently pointed at the dev server origin (i.e. we can see the app). */
+	readonly previewOnServerOrigin: boolean;
+	/** Whether the app actually rendered: true/false when probed, undefined when it could not be. */
+	readonly renderVerified: boolean | undefined;
+}
+
+/**
+ * Derive the reported health from independent signals so a reachable transport can never be
+ * mistaken for a rendered app (the "healthy but blank" failure):
+ * - not reachable -> `unhealthy`.
+ * - reachable but not looking at the app yet (still on the startup/blank page) -> `reachable`.
+ * - reachable and the app is confirmed rendered -> `healthy`.
+ * - reachable but the app is confirmed NOT rendered (empty root / document not complete) -> `reachable`.
+ * - reachable and render could not be determined (no probe available) -> `healthy` (fail open, so a
+ *   missing/blocked probe never regresses an otherwise working preview).
+ */
+export function resolveWorkbenchAppPreviewHealthFromSignals(signals: IWorkbenchAppPreviewHealthSignals): WorkbenchAppPreviewHealthState {
+	if (!signals.httpReachable) {
+		return 'unhealthy';
+	}
+	if (!signals.previewOnServerOrigin) {
+		return 'reachable';
+	}
+	if (signals.renderVerified === false) {
+		return 'reachable';
+	}
+	return 'healthy';
 }
 
 export function getTargetUrl(target: string | IPreviewConfigTarget | undefined): string | undefined {
@@ -204,12 +359,13 @@ export function resolveWorkbenchAppPreviewUrl(candidates: IWorkbenchAppPreviewUr
 }
 
 export function resolveWorkbenchAppPreviewPreferredUrl(candidates: IWorkbenchAppPreviewPreferredUrlCandidates): string | undefined {
+	const duplicateDiscoveredRunningServerUrl = !candidates.allowRunningServerFallback && isWorkbenchAppPreviewLoopbackUrl(candidates.runningServerUrl) && areWorkbenchAppPreviewUrlsEqual(candidates.discoveredUrl, candidates.runningServerUrl);
 	const runningServerUrl = candidates.allowRunningServerFallback ? candidates.runningServerUrl : undefined;
-	const discoveredUrl = !candidates.allowRunningServerFallback && isWorkbenchAppPreviewLoopbackUrl(candidates.runningServerUrl) && areWorkbenchAppPreviewUrlsEqual(candidates.discoveredUrl, candidates.runningServerUrl)
+	const discoveredUrl = duplicateDiscoveredRunningServerUrl
 		? undefined
 		: candidates.discoveredUrl;
 
-	return resolveWorkbenchAppPreviewUrl({
+	const resolved = resolveWorkbenchAppPreviewUrl({
 		localBranchOverride: candidates.localBranchOverride,
 		localDefaultOverride: candidates.localDefaultOverride,
 		repoBranchUrl: candidates.repoBranchUrl,
@@ -217,6 +373,23 @@ export function resolveWorkbenchAppPreviewPreferredUrl(candidates: IWorkbenchApp
 		runningServerUrl,
 		discoveredUrl,
 	});
+
+	return resolved ?? (duplicateDiscoveredRunningServerUrl ? candidates.runningServerUrl?.trim() || undefined : undefined);
+}
+
+export interface IWorkbenchAppPreviewAdvertisedNavigationUrlPolicy {
+	readonly advertisedUrl: string;
+	readonly previewUrl?: string;
+	readonly previewSource?: WorkbenchAppPreviewTargetPreviewSource;
+}
+
+export function resolveWorkbenchAppPreviewAdvertisedNavigationUrl(policy: IWorkbenchAppPreviewAdvertisedNavigationUrlPolicy): string {
+	const previewUrl = policy.previewUrl?.trim();
+	if (previewUrl && (policy.previewSource === 'frameworkOpen' || policy.previewSource === 'config')) {
+		return previewUrl;
+	}
+
+	return policy.advertisedUrl.trim();
 }
 
 function areWorkbenchAppPreviewUrlsEqual(first: string | undefined, second: string | undefined): boolean {
@@ -233,7 +406,7 @@ function areWorkbenchAppPreviewUrlsEqual(first: string | undefined, second: stri
 	}
 }
 
-function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boolean {
+export function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boolean {
 	if (!url) {
 		return false;
 	}
@@ -241,6 +414,19 @@ function isWorkbenchAppPreviewLoopbackUrl(url: string | undefined): boolean {
 	try {
 		const parsed = new URL(url);
 		return isWorkbenchAppPreviewLoopbackHost(parsed.hostname);
+	} catch {
+		return false;
+	}
+}
+
+function isWorkbenchAppPreviewLocalUrl(url: string | undefined): boolean {
+	if (!url) {
+		return false;
+	}
+
+	try {
+		const parsed = new URL(url);
+		return (parsed.protocol === 'http:' || parsed.protocol === 'https:') && isWorkbenchAppPreviewLocalHost(parsed.hostname);
 	} catch {
 		return false;
 	}
@@ -405,7 +591,137 @@ export function shouldRecoverWorkbenchAppPreviewLoadError(policy: IWorkbenchAppP
 		return false;
 	}
 
-	return policy.errorCode === -7 || policy.errorCode === -102 || policy.errorCode === -105 || policy.errorCode === -106;
+	return isWorkbenchAppPreviewConnectionLoadErrorCode(policy.errorCode);
+}
+
+export function shouldShowWorkbenchAppPreviewLoadErrorOverlay(policy: IWorkbenchAppPreviewLoadErrorOverlayPolicy): boolean {
+	if (!policy.previewStartupInProgress) {
+		return true;
+	}
+
+	if (!isWorkbenchAppPreviewConnectionLoadErrorCode(policy.errorCode)) {
+		return true;
+	}
+
+	return !isWorkbenchAppPreviewLocalUrl(policy.errorUrl);
+}
+
+export function shouldRestartWorkbenchAppPreviewAfterLoadError(policy: IWorkbenchAppPreviewLoadErrorRestartPolicy): boolean {
+	if (!policy.recoverableLoadError) {
+		return false;
+	}
+
+	if (!policy.serverProcessAlive) {
+		return true;
+	}
+
+	return policy.serverState === 'failed' || policy.serverState === 'stopped';
+}
+
+export function shouldIgnoreWorkbenchAppPreviewLoadEvent(policy: IWorkbenchAppPreviewLoadEventGatePolicy): boolean {
+	return policy.eventLoading
+		|| !policy.hasError
+		|| policy.previewStartupInProgress
+		|| policy.previewLoadFailureRecoveryInFlight
+		|| policy.serverStartInFlight;
+}
+
+function isWorkbenchAppPreviewConnectionLoadErrorCode(errorCode: number): boolean {
+	return errorCode === -7 || errorCode === -102 || errorCode === -105 || errorCode === -106;
+}
+
+export function getWorkbenchAppPreviewServerStateAfterCommandExit(policy: IWorkbenchAppPreviewServerCommandExitPolicy): WorkbenchAppPreviewServerState | undefined {
+	if (policy.serverState !== 'starting' && policy.serverState !== 'running') {
+		return undefined;
+	}
+
+	return policy.serverHealth === 'healthy' ? 'stopped' : 'failed';
+}
+
+export function getWorkbenchAppPreviewServerStateAfterHealthTimeout(policy: IWorkbenchAppPreviewHealthTimeoutPolicy): WorkbenchAppPreviewServerState | undefined {
+	if (policy.serverState !== 'starting' && policy.serverState !== 'running') {
+		return undefined;
+	}
+
+	if (policy.serverHealth === 'healthy') {
+		return undefined;
+	}
+
+	if (policy.serverTerminalExited || policy.serverCommandActive === false) {
+		return 'failed';
+	}
+
+	return undefined;
+}
+
+/**
+ * A background poll (branch/workspace refresh) periodically tries to auto-start the preview
+ * server whenever it looks idle. Only 'stopped' is actually idle - 'starting'/'running' are
+ * already in flight, and 'failed' must wait for the user to explicitly retry/restart from the
+ * startup page rather than being silently retried on the next poll tick. Without excluding
+ * 'failed' here, a still-installing terminal that merely looked "failed" for a moment (e.g. right
+ * after a slow-install notice) would get torn down and restarted from zero by the very next poll.
+ */
+export function shouldSkipWorkbenchAppPreviewAutoStart(policy: IWorkbenchAppPreviewAutoStartGatePolicy): boolean {
+	return policy.previewStartupInProgress
+		|| policy.previewAutoStartInFlight
+		|| policy.serverState === 'starting'
+		|| policy.serverState === 'running'
+		|| policy.serverState === 'failed';
+}
+
+/**
+ * Classifies how a dependency install ended, once it has actually ended. A merely slow install
+ * (still running) is never passed to this function - only a real terminal exit or a completed
+ * command's exit code reach here - so "slow" can never be conflated with "crashed" or "failed".
+ */
+export function resolveWorkbenchAppPreviewInstallOutcome(policy: IWorkbenchAppPreviewInstallOutcomePolicy): WorkbenchAppPreviewInstallOutcome {
+	if (policy.serverTerminalExited) {
+		return 'crashed';
+	}
+
+	if (policy.exitCode !== undefined && policy.exitCode !== 0) {
+		return 'failed';
+	}
+
+	return 'succeeded';
+}
+
+export function shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy: IWorkbenchAppPreviewServerStartConfigurationPolicy): boolean {
+	const hasRunnableServerConfig = policy.hasRunnableServerConfig || policy.canStartServerWithoutInstall;
+	return !policy.configuredUrl?.trim() && !policy.inferredStartupUrl?.trim() && policy.needsConfigurationPrompt && !hasRunnableServerConfig;
+}
+
+export function canStartWorkbenchAppPreviewServerWithoutInstall(config: IResolvedWorkbenchAppPreviewDevConfig | undefined): boolean {
+	return !!config && !config.installCommand && !config.corepackInstallCommand;
+}
+
+export function resolveWorkbenchAppPreviewInferredStartupUrl(policy: IWorkbenchAppPreviewInferredStartupUrlPolicy): string | undefined {
+	const branchUrl = getWorkbenchAppPreviewVerifiedRuntimeUrl(policy.branchRuntime, policy.port);
+	if (branchUrl) {
+		return branchUrl;
+	}
+
+	let latest: IWorkbenchAppPreviewBranchRuntime | undefined;
+	for (const runtime of policy.repoRuntimes ?? []) {
+		if (!runtime.lastSuccessfulUrl?.trim()) {
+			continue;
+		}
+		if (!latest || (runtime.lastSuccessfulAt ?? 0) > (latest.lastSuccessfulAt ?? 0)) {
+			latest = runtime;
+		}
+	}
+
+	return getWorkbenchAppPreviewVerifiedRuntimeUrl(latest, policy.port);
+}
+
+function getWorkbenchAppPreviewVerifiedRuntimeUrl(runtime: IWorkbenchAppPreviewBranchRuntime | undefined, port: number | undefined): string | undefined {
+	const url = runtime?.lastSuccessfulUrl?.trim();
+	if (!url) {
+		return undefined;
+	}
+
+	return adaptWorkbenchAppPreviewUrlToPort(url, port);
 }
 
 export function resolveWorkbenchAppPreviewAdvertisedUrl(policy: IWorkbenchAppPreviewAdvertisedUrlResolutionPolicy): string | undefined {
@@ -507,6 +823,7 @@ export function resolveWorkbenchAppPreviewDevConfig(config: IWorkbenchAppPreview
 		cwd: target.cwd,
 		portEnv: target.portEnv?.trim() || undefined,
 		url: target.url?.trim() || DEFAULT_DEV_URL_TEMPLATE,
+		...(target.healthUrl?.trim() ? { healthUrl: target.healthUrl.trim() } : {}),
 		healthPath: target.healthPath,
 	};
 }
@@ -551,22 +868,66 @@ export function getWorkbenchAppPreviewDevConfigFixedPort(config: IResolvedWorkbe
 	return config.fixedPort ?? getWorkbenchAppPreviewUrlFixedPort(config.url);
 }
 
-export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv): IResolvedWorkbenchAppPreviewDevConfig | undefined {
+function isWorkbenchAppPreviewRsbuildScript(script: string): boolean {
+	return /\brsbuild(?:\s|$)/.test(script.trim().toLowerCase());
+}
+
+function getWorkbenchAppPreviewFrameworkServerUrl(frameworkConfig: IWorkbenchAppPreviewFrameworkDevServerConfig): string {
+	const protocol = frameworkConfig.protocol ?? 'http';
+	const host = frameworkConfig.host ?? LOOPBACK_PREVIEW_HOST;
+	const port = frameworkConfig.fixedPort ?? '${PORT}';
+	return `${protocol}://${host}:${port}/`;
+}
+
+function createWorkbenchAppPreviewFrameworkDevConfig(scriptName: string, scriptCommandPrefix: string, corepackScriptCommandPrefix: string | undefined, frameworkConfig: IWorkbenchAppPreviewFrameworkDevServerConfig, installCommand: string | undefined, corepackInstallCommand: string | undefined, dependencyReadiness: 'ready' | 'missing' | 'stale' | undefined): IResolvedWorkbenchAppPreviewDevConfig {
+	const command = `${scriptCommandPrefix} ${scriptName}`;
+	return {
+		command,
+		...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}` } : {}),
+		portEnv: frameworkConfig.portEnv ?? (frameworkConfig.fixedPort === undefined ? DEFAULT_DEV_PORT_ENV : undefined),
+		url: getWorkbenchAppPreviewFrameworkServerUrl(frameworkConfig),
+		healthPath: '/',
+		...(frameworkConfig.fixedPort !== undefined ? { fixedPort: frameworkConfig.fixedPort } : {}),
+		...(frameworkConfig.openUrl ? { previewUrl: frameworkConfig.openUrl, previewSource: 'frameworkOpen' as const } : {}),
+		...(frameworkConfig.allowSelfSignedLocalHttps !== undefined ? { allowSelfSignedLocalHttps: frameworkConfig.allowSelfSignedLocalHttps } : {}),
+		...(installCommand ? { installCommand } : {}),
+		...(corepackInstallCommand ? { corepackInstallCommand } : {}),
+		...(installCommand && dependencyReadiness ? { dependencyReadiness } : {}),
+	};
+}
+
+export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<string, unknown> | undefined, url?: string, env?: IWorkbenchAppPreviewEnv, packageManager?: IWorkbenchAppPreviewHeuristicPackageManagerConfig, frameworkConfig?: IWorkbenchAppPreviewFrameworkDevServerConfig): IResolvedWorkbenchAppPreviewDevConfig | undefined {
 	if (!scripts) {
 		return undefined;
 	}
 
 	const envUrl = getWorkbenchAppPreviewPublicEnvUrl(env);
 	const resolvedUrl = url?.trim() || envUrl || DEFAULT_DEV_URL_TEMPLATE;
-	const fixedPort = getWorkbenchAppPreviewUrlFixedPort(resolvedUrl) ?? parseWorkbenchAppPreviewPort(env?.PORT);
-	for (const scriptName of ['dev', 'start', 'serve']) {
-		if (typeof scripts[scriptName] === 'string') {
+	const configuredFixedPort = getWorkbenchAppPreviewUrlFixedPort(resolvedUrl) ?? parseWorkbenchAppPreviewPort(env?.PORT);
+	const scriptCommandPrefix = packageManager?.scriptCommandPrefix?.trim() || 'npm run';
+	const corepackScriptCommandPrefix = packageManager?.corepackScriptCommandPrefix?.trim();
+	const installCommand = packageManager?.dependencyReadiness && packageManager.dependencyReadiness !== 'ready'
+		? packageManager.installCommand?.trim()
+		: undefined;
+	const corepackInstallCommand = installCommand ? packageManager?.corepackInstallCommand?.trim() : undefined;
+	for (const scriptName of ['dev', 'start:ci', 'start', 'serve']) {
+		const script = scripts[scriptName];
+		if (typeof script === 'string') {
+			if (frameworkConfig && isWorkbenchAppPreviewRsbuildScript(script)) {
+				return createWorkbenchAppPreviewFrameworkDevConfig(scriptName, scriptCommandPrefix, corepackScriptCommandPrefix, frameworkConfig, installCommand, corepackInstallCommand, packageManager?.dependencyReadiness);
+			}
+			const fixedPort = configuredFixedPort ?? getWorkbenchAppPreviewScriptFixedPort(script);
+			const scriptArgs = getWorkbenchAppPreviewDevServerScriptArgs(script);
 			return {
-				command: `npm run ${scriptName}`,
+				command: `${scriptCommandPrefix} ${scriptName}${scriptArgs}`,
+				...(corepackScriptCommandPrefix ? { corepackCommand: `${corepackScriptCommandPrefix} ${scriptName}${scriptArgs}` } : {}),
 				portEnv: DEFAULT_DEV_PORT_ENV,
 				url: resolvedUrl,
 				healthPath: '/',
 				...(fixedPort !== undefined ? { fixedPort } : {}),
+				...(installCommand ? { installCommand } : {}),
+				...(corepackInstallCommand ? { corepackInstallCommand } : {}),
+				...(installCommand && packageManager?.dependencyReadiness ? { dependencyReadiness: packageManager.dependencyReadiness } : {}),
 			};
 		}
 	}
@@ -574,33 +935,272 @@ export function resolveWorkbenchAppPreviewHeuristicDevConfig(scripts: Record<str
 	return undefined;
 }
 
-export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string): IResolvedWorkbenchAppPreviewDevConfig {
+function extractWorkbenchAppPreviewObjectLiteralBlock(content: string, propertyName: string): string | undefined {
+	const match = new RegExp(`\\b${propertyName}\\s*:\\s*\\{`).exec(content);
+	if (!match) {
+		return undefined;
+	}
+
+	let depth = 0;
+	let quote: string | undefined;
+	let escaped = false;
+	const start = match.index + match[0].lastIndexOf('{');
+	for (let index = start; index < content.length; index++) {
+		const char = content[index];
+		if (quote) {
+			if (escaped) {
+				escaped = false;
+			} else if (char === '\\') {
+				escaped = true;
+			} else if (char === quote) {
+				quote = undefined;
+			}
+			continue;
+		}
+
+		if (char === '\'' || char === '"' || char === '`') {
+			quote = char;
+			continue;
+		}
+		if (char === '{') {
+			depth++;
+		} else if (char === '}') {
+			depth--;
+			if (depth === 0) {
+				return content.slice(start + 1, index);
+			}
+		}
+	}
+
+	return undefined;
+}
+
+function getWorkbenchAppPreviewLiteralProperty(block: string, propertyName: string): string | undefined {
+	const match = new RegExp(`\\b${propertyName}\\s*:\\s*(['"\`])([^'"\`]+)\\1`).exec(block);
+	return match?.[2]?.trim() || undefined;
+}
+
+function hasWorkbenchAppPreviewProperty(block: string, propertyName: string): boolean {
+	return new RegExp(`\\b${propertyName}\\s*:`).test(block);
+}
+
+function getWorkbenchAppPreviewRsbuildPort(block: string): { fixedPort?: number; portEnv?: string } | undefined {
+	const envFallbackMatch = /\bport\s*:\s*(?:Number\s*\(\s*)?process\.env\.([A-Za-z_][A-Za-z0-9_]*)\s*\)?\s*(?:\|\||\?\?)\s*([0-9]{1,5})/.exec(block);
+	if (envFallbackMatch) {
+		const fixedPort = parseWorkbenchAppPreviewPort(envFallbackMatch[2]);
+		return fixedPort === undefined ? undefined : { fixedPort, portEnv: envFallbackMatch[1] };
+	}
+
+	const literalMatch = /\bport\s*:\s*([0-9]{1,5})\b/.exec(block);
+	if (literalMatch) {
+		const fixedPort = parseWorkbenchAppPreviewPort(literalMatch[1]);
+		return fixedPort === undefined ? undefined : { fixedPort };
+	}
+
+	return hasWorkbenchAppPreviewProperty(block, 'port') ? undefined : {};
+}
+
+export function parseWorkbenchAppPreviewRsbuildConfig(content: string): IWorkbenchAppPreviewFrameworkDevServerConfig | undefined {
+	const serverBlock = extractWorkbenchAppPreviewObjectLiteralBlock(content, 'server');
+	if (!serverBlock) {
+		return undefined;
+	}
+
+	const host = getWorkbenchAppPreviewLiteralProperty(serverBlock, 'host');
+	if (!host && hasWorkbenchAppPreviewProperty(serverBlock, 'host')) {
+		return undefined;
+	}
+
+	const openUrl = getWorkbenchAppPreviewLiteralProperty(serverBlock, 'open');
+	if (!openUrl && hasWorkbenchAppPreviewProperty(serverBlock, 'open')) {
+		return undefined;
+	}
+
+	const port = getWorkbenchAppPreviewRsbuildPort(serverBlock);
+	if (!port) {
+		return undefined;
+	}
+
+	const httpsMatch = /\bhttps\s*:\s*(true|\{)/.exec(serverBlock);
+	const protocol = httpsMatch ? 'https' : 'http';
+	if (!host && !openUrl && port.fixedPort === undefined && !httpsMatch) {
+		return undefined;
+	}
+
+	return {
+		...(host ? { host } : {}),
+		...(port.fixedPort !== undefined ? { fixedPort: port.fixedPort } : {}),
+		...(port.portEnv ? { portEnv: port.portEnv } : {}),
+		protocol,
+		...(openUrl ? { openUrl } : {}),
+		allowSelfSignedLocalHttps: protocol === 'https' && isWorkbenchAppPreviewLocalHost(host ?? LOOPBACK_PREVIEW_HOST),
+	};
+}
+
+function getWorkbenchAppPreviewScriptFixedPort(script: string): number | undefined {
+	const ports = new Set<number>();
+	collectWorkbenchAppPreviewScriptPorts(script, /(?:^|[\s"'`(;&|])(?:--port|-p)(?:=|\s+)([0-9]{1,5})(?=$|[\s"'`);&|])/gi, ports);
+	collectWorkbenchAppPreviewScriptPorts(script, /(?:^|[\s"'`(;&|])PORT=([0-9]{1,5})(?=$|[\s"'`);&|])/g, ports);
+	collectWorkbenchAppPreviewScriptPorts(script, /\b(?:tcp|https?|https?-get):(?:(?:\/\/)?[^:\s"'`;&|)]*:)?([0-9]{1,5})(?=$|[\/\s"'`);&|])/gi, ports);
+
+	if (ports.size !== 1) {
+		return undefined;
+	}
+
+	return ports.values().next().value;
+}
+
+function collectWorkbenchAppPreviewScriptPorts(script: string, pattern: RegExp, ports: Set<number>): void {
+	for (const match of script.matchAll(pattern)) {
+		const port = parseWorkbenchAppPreviewPort(match[1]);
+		if (port !== undefined) {
+			ports.add(port);
+		}
+	}
+}
+
+function getWorkbenchAppPreviewDevServerScriptArgs(script: string): string {
+	const normalized = script.trim().toLowerCase();
+	if (!/\brsbuild(?:\s|$)/.test(normalized)) {
+		return '';
+	}
+
+	if (/(^|\s)(--port(?:=|\s)|-p(?:=|\s))/.test(normalized)) {
+		return '';
+	}
+
+	return ' -- --port ${PORT}';
+}
+
+function normalizeWorkbenchAppPreviewStaticHtmlPath(path: string): string | undefined {
+	const withoutLeadingSlash = path.trim().replace(/\\/g, '/').replace(/^\.\/+/, '').replace(/^\/+/, '');
+	const segments = withoutLeadingSlash.split('/').filter(segment => segment && segment !== '.');
+	if (!segments.length || segments.some(segment => segment === '..')) {
+		return undefined;
+	}
+
+	const normalized = segments.join('/');
+	return normalized.toLowerCase().endsWith('.html') ? normalized : undefined;
+}
+
+function getWorkbenchAppPreviewStaticHtmlPathScore(path: string): number {
+	const lower = path.toLowerCase();
+	const segments = lower.split('/');
+	const basename = segments[segments.length - 1] ?? lower;
+	let score = segments.length * 10;
+
+	if (basename === 'index.html') {
+		score -= 1000;
+	}
+	if (segments.includes('docs')) {
+		score -= 20;
+	}
+	if (segments.includes('architecture')) {
+		score -= 20;
+	}
+	if (basename.includes('architecture')) {
+		score -= 12;
+	}
+	if (basename.includes('overview') || basename.includes('home') || basename.includes('readme')) {
+		score -= 8;
+	}
+	if (basename.includes('diagram') || basename.includes('map')) {
+		score += 8;
+	}
+
+	return score;
+}
+
+export function selectWorkbenchAppPreviewStaticHtmlFile(paths: readonly string[]): string | undefined {
+	const candidates = paths
+		.map(path => normalizeWorkbenchAppPreviewStaticHtmlPath(path))
+		.filter((path): path is string => !!path);
+
+	candidates.sort((first, second) => {
+		const scoreDifference = getWorkbenchAppPreviewStaticHtmlPathScore(first) - getWorkbenchAppPreviewStaticHtmlPathScore(second);
+		return scoreDifference || first.localeCompare(second);
+	});
+
+	return candidates[0];
+}
+
+function encodeWorkbenchAppPreviewStaticHtmlPath(path: string | undefined): string {
+	const normalized = path ? normalizeWorkbenchAppPreviewStaticHtmlPath(path) : undefined;
+	return normalized?.split('/').map(encodeURIComponent).join('/') ?? '';
+}
+
+export function resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir: string, initialPath?: string): IResolvedWorkbenchAppPreviewDevConfig {
+	const encodedInitialPath = encodeWorkbenchAppPreviewStaticHtmlPath(initialPath);
 	return {
 		command: `python3 -m http.server \${PORT} --directory ${serveDir}`,
 		portEnv: DEFAULT_DEV_PORT_ENV,
-		url: DEFAULT_DEV_URL_TEMPLATE,
+		url: encodedInitialPath ? `${DEFAULT_DEV_URL_TEMPLATE}${encodedInitialPath}` : DEFAULT_DEV_URL_TEMPLATE,
 		healthPath: '/',
 	};
 }
 
-export function applyWorkbenchAppPreviewDevPort(config: IResolvedWorkbenchAppPreviewDevConfig, port: number): IWorkbenchAppPreviewResolvedServer {
-	const portValue = String(port);
+export function resolveWorkbenchAppPreviewDevServerTarget(config: IResolvedWorkbenchAppPreviewDevConfig, port: number, cwd?: string): IWorkbenchAppPreviewResolvedTarget {
+	const effectivePort = config.fixedPort ?? port;
+	const portValue = String(effectivePort);
 	const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, portValue);
 	const url = replacePort(config.url);
-	const healthUrl = config.healthPath ? new URL(config.healthPath, url).toString() : url;
+	const healthUrl = config.healthUrl ? replacePort(config.healthUrl) : config.healthPath ? new URL(config.healthPath, url).toString() : url;
+	const previewUrl = config.previewUrl ? replacePort(config.previewUrl) : url;
+	const origin = new URL(url).origin;
 	return {
-		command: replacePort(config.command),
-		env: config.portEnv ? { [config.portEnv]: portValue } : {},
-		url,
-		healthUrl,
+		process: {
+			command: replacePort(config.command),
+			...(cwd ? { cwd } : {}),
+			// CRA, webpack, and Vite honor BROWSER=none. Rsbuild may log a benign failed launch for
+			// a browser named "none", but it still prevents the OS-level browser from opening.
+			env: { BROWSER: 'none', ...(config.portEnv ? { [config.portEnv]: portValue } : {}) },
+		},
+		port: {
+			mode: config.fixedPort === undefined ? 'assigned' : 'fixed',
+			value: effectivePort,
+			...(config.portEnv ? { env: config.portEnv } : {}),
+		},
+		server: {
+			url,
+			origin,
+			allowSelfSignedLocalHttps: config.allowSelfSignedLocalHttps ?? false,
+		},
+		health: { url: healthUrl },
+		preview: {
+			url: previewUrl,
+			source: config.previewSource ?? 'server',
+		},
 	};
 }
 
-export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port: number | undefined): string | undefined {
+export function applyWorkbenchAppPreviewDevPort(config: IResolvedWorkbenchAppPreviewDevConfig, port: number): IWorkbenchAppPreviewResolvedServer {
+	const target = resolveWorkbenchAppPreviewDevServerTarget(config, port);
+	return {
+		command: target.process.command,
+		env: target.process.env,
+		url: target.server.url,
+		healthUrl: target.health.url,
+	};
+}
+
+function shouldAdaptWorkbenchAppPreviewParsedUrlToPort(parsed: URL, policy: IWorkbenchAppPreviewUrlPortAdaptPolicy | undefined): boolean {
+	if (policy?.managedServerOrigin) {
+		try {
+			return parsed.origin === new URL(policy.managedServerOrigin).origin;
+		} catch {
+			return false;
+		}
+	}
+
+	return isWorkbenchAppPreviewLocalHost(parsed.hostname);
+}
+
+export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port: number | undefined, policy?: IWorkbenchAppPreviewUrlPortAdaptPolicy): string | undefined {
 	if (!url || !port) {
 		return url;
 	}
 
+	const hadPortTemplate = url.includes('${PORT}');
 	const concreteUrl = url.replace(/\$\{PORT\}/g, String(port));
 	let parsed: URL;
 	try {
@@ -613,8 +1213,69 @@ export function adaptWorkbenchAppPreviewUrlToPort(url: string | undefined, port:
 		return url;
 	}
 
-	parsed.port = String(port);
+	if (hadPortTemplate || shouldAdaptWorkbenchAppPreviewParsedUrlToPort(parsed, policy)) {
+		parsed.port = String(port);
+	}
 	return parsed.href;
+}
+
+export interface IWorkbenchAppPreviewDiscoveredPortReconciliationPolicy {
+	readonly serverUrl: string | undefined;
+	readonly serverHealthUrl: string | undefined;
+	readonly serverBranch: string | undefined;
+	readonly serverFixedPort: number | undefined;
+	readonly discoveredUrl: string;
+	readonly discoveredBranchName: string | undefined;
+}
+
+export interface IWorkbenchAppPreviewDiscoveredPortReconciliation {
+	readonly port: number;
+	readonly url: string;
+	readonly healthUrl: string | undefined;
+}
+
+function getWorkbenchAppPreviewUrlPort(url: URL): number {
+	return Number(url.port || (url.protocol === 'https:' ? 443 : 80));
+}
+
+/**
+ * Many dev servers silently bind to a different port than the one they were asked for
+ * (e.g. "port 3001 is in use, using 3002 instead") without failing or printing a
+ * recognizable port-conflict error. When a discovered URL from the server's own terminal
+ * output disagrees with the port we assumed, trust the terminal over our assumption so
+ * navigation, health checks, and status reporting all point at the server that is actually
+ * running - regardless of which project/tool produced it.
+ */
+export function resolveWorkbenchAppPreviewDiscoveredPortReconciliation(policy: IWorkbenchAppPreviewDiscoveredPortReconciliationPolicy): IWorkbenchAppPreviewDiscoveredPortReconciliation | undefined {
+	if (!policy.serverUrl || policy.serverFixedPort || policy.serverBranch !== policy.discoveredBranchName) {
+		return undefined;
+	}
+
+	let discovered: URL;
+	let expected: URL;
+	try {
+		discovered = new URL(policy.discoveredUrl);
+		expected = new URL(policy.serverUrl);
+	} catch {
+		return undefined;
+	}
+
+	const sameHost = discovered.hostname === expected.hostname
+		|| (isWorkbenchAppPreviewLoopbackHost(discovered.hostname) && isWorkbenchAppPreviewLoopbackHost(expected.hostname));
+	if (!sameHost) {
+		return undefined;
+	}
+
+	const discoveredPort = getWorkbenchAppPreviewUrlPort(discovered);
+	if (!discoveredPort || discoveredPort === getWorkbenchAppPreviewUrlPort(expected)) {
+		return undefined;
+	}
+
+	return {
+		port: discoveredPort,
+		url: adaptWorkbenchAppPreviewUrlToPort(policy.serverUrl, discoveredPort) ?? policy.serverUrl,
+		healthUrl: adaptWorkbenchAppPreviewUrlToPort(policy.serverHealthUrl, discoveredPort) ?? policy.serverHealthUrl,
+	};
 }
 
 export function isWorkbenchAppPreviewPortConflict(output: string, port: number | undefined): boolean {
@@ -628,6 +1289,80 @@ export function isWorkbenchAppPreviewPortConflict(output: string, port: number |
 	}
 
 	return new RegExp(`(^|[^0-9])${port}([^0-9]|$)`).test(output);
+}
+
+export function isWorkbenchAppPreviewPathUnderRoot(candidatePath: string, rootPath: string): boolean {
+	const normalize = (value: string) => value.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+	const candidate = normalize(candidatePath);
+	const root = normalize(rootPath);
+	return candidate === root || candidate.startsWith(`${root}/`);
+}
+
+export interface IWorkbenchAppPreviewPortOwner {
+	readonly pid: number;
+	readonly cwd?: string;
+}
+
+export interface IWorkbenchAppPreviewFixedPortPolicy {
+	/** Whether the required port currently has nothing bound to it. */
+	readonly portFree: boolean;
+	/** The process currently listening on the port, if known. */
+	readonly owner: IWorkbenchAppPreviewPortOwner | undefined;
+	/** Absolute path of the workspace whose dev server needs the port. */
+	readonly rootPath: string;
+}
+
+/**
+ * A repo-fixed port cannot be swapped for a free one (the built HTML pins its asset URLs to it), so
+ * before launching we must make the port ours. This decides what to do about whoever holds it:
+ *
+ * - `ready` - nothing is bound; launch immediately.
+ * - `reuseRepoLocal` - a process running out of this same repo owns it (our own server tearing down,
+ *   or an independently started dev server per the .designer/dev.json no-op pattern); reuse it.
+ * - `closeForeign` - a process from a different repo is squatting on the port; close it so the
+ *   correct app can bind (opening/switching must never land on a stale/foreign server).
+ * - `waitUnknownOwner` - the port is occupied but the owner could not be identified; wait for it.
+ */
+export type WorkbenchAppPreviewFixedPortAction = 'ready' | 'reuseRepoLocal' | 'closeForeign' | 'waitUnknownOwner';
+
+export function resolveWorkbenchAppPreviewFixedPortAction(policy: IWorkbenchAppPreviewFixedPortPolicy): WorkbenchAppPreviewFixedPortAction {
+	if (policy.portFree) {
+		return 'ready';
+	}
+	if (policy.owner?.cwd && isWorkbenchAppPreviewPathUnderRoot(policy.owner.cwd, policy.rootPath)) {
+		return 'reuseRepoLocal';
+	}
+	if (policy.owner && Number.isInteger(policy.owner.pid) && policy.owner.pid > 0) {
+		return 'closeForeign';
+	}
+	return 'waitUnknownOwner';
+}
+
+export function classifyWorkbenchAppPreviewTerminalFailure(output: string, port: number | undefined): WorkbenchAppPreviewTerminalFailure {
+	if (isWorkbenchAppPreviewPortConflict(output, port)) {
+		return 'portConflict';
+	}
+
+	const lowerOutput = output.toLowerCase();
+	if (lowerOutput.includes('command not found') ||
+		lowerOutput.includes('not recognized as an internal or external command') ||
+		lowerOutput.includes('enoent')) {
+		return 'missingBinary';
+	}
+
+	if (lowerOutput.includes('cannot find module') ||
+		lowerOutput.includes('module not found') ||
+		lowerOutput.includes('err_module_not_found') ||
+		lowerOutput.includes('cannot find package')) {
+		return 'moduleNotFound';
+	}
+
+	if (lowerOutput.includes('permission denied') ||
+		lowerOutput.includes('eacces')) {
+		return 'permissionDenied';
+	}
+
+	return 'unknown';
 }
 
 export function shouldRestartWorkbenchAppPreviewAfterHealthFailures(policy: IWorkbenchAppPreviewHealthFailureRestartPolicy): boolean {

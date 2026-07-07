@@ -4,19 +4,22 @@
  *--------------------------------------------------------------------------------------------*/
 
 import assert from 'assert';
+import { URI } from '../../../../../base/common/uri.js';
 import { Emitter, Event } from '../../../../../base/common/event.js';
 import { timeout } from '../../../../../base/common/async.js';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
 import { CommandsRegistry, ICommandEvent, ICommandService } from '../../../../../platform/commands/common/commands.js';
+import { ConfirmResult, IFileDialogService, IOpenDialogOptions, IPickAndOpenOptions, ISaveDialogOptions } from '../../../../../platform/dialogs/common/dialogs.js';
 import { TestDialogService } from '../../../../../platform/dialogs/test/common/testDialogService.js';
 import { IWorkspaceTrustRequestService, WorkspaceTrustRequestOptions, WorkspaceTrustUriResponse } from '../../../../../platform/workspace/common/workspaceTrust.js';
 import { DesignerBranchSwitcher } from '../../../../browser/parts/designerBranchSwitcher/designerBranchSwitcher.js';
+import { GetDesignerReposStateCommandId } from '../../../../services/workspaces/common/designerRepoCommands.js';
 
 suite('DesignerBranchSwitcher', () => {
 	const disposables = ensureNoDisposablesAreLeakedInTestSuite();
 
-	function createSwitcher(parent: HTMLElement, commandService: ICommandService, dialogService = new TestDialogService(), trustService: IWorkspaceTrustRequestService = new StaticWorkspaceTrustRequestService(true)): DesignerBranchSwitcher {
-		return new DesignerBranchSwitcher(parent, commandService, dialogService, trustService);
+	function createSwitcher(parent: HTMLElement, commandService: ICommandService, dialogService = new TestDialogService(), trustService: IWorkspaceTrustRequestService = new StaticWorkspaceTrustRequestService(true), fileDialogService: IFileDialogService = new RecordingFileDialogService()): DesignerBranchSwitcher {
+		return new DesignerBranchSwitcher(parent, commandService, dialogService, trustService, fileDialogService);
 	}
 
 	function getOpenDropdown(): HTMLElement {
@@ -279,8 +282,74 @@ suite('DesignerBranchSwitcher', () => {
 
 		const dropdown = getOpenDropdown();
 		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__repo-row')?.textContent?.includes('VSCode Fork'), true);
-		assert.ok(dropdown.querySelector('.designer-branch-switcher__repo-url-input'));
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
+		assert.ok(input);
+		assert.strictEqual(input.placeholder, 'Paste repo URL');
+		assert.ok(dropdown.querySelector('.designer-branch-switcher__repo-source-folder'));
+		assert.strictEqual((dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).disabled, true);
 		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__filter-input'), null);
+	});
+
+	test('renders Add repo CTA and repo empty state when the repo list is empty', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		const commandService = new EmptyRepoCommandService();
+		disposables.add(createSwitcher(parent, commandService));
+
+		await timeout(0);
+
+		const repoButton = parent.querySelector('.designer-branch-switcher__repo-button') as HTMLButtonElement;
+		assert.strictEqual(repoButton.textContent?.trim(), 'Add repo');
+		assert.strictEqual(repoButton.classList.contains('designer-branch-switcher__repo-button--empty-cta'), true);
+
+		repoButton.click();
+		await timeout(0);
+
+		const dropdown = getOpenDropdown();
+		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__empty-title')?.textContent, 'No repos added yet');
+		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__empty-message')?.textContent, 'Add a repo to start exploring code with Parakit.');
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
+		assert.ok(input);
+		assert.strictEqual(input.placeholder, 'Paste repo URL');
+
+		input.value = 'https://github.com/workplan/design-system.git';
+		input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+		(dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).click();
+		await timeout(10);
+
+		assert.deepStrictEqual(commandService.addSources, ['https://github.com/workplan/design-system.git']);
+	});
+
+	test('renders branch empty state when the repo list is empty', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		const commandService = new EmptyRepoCommandService();
+		const fileDialogService = new RecordingFileDialogService([URI.file('/workspace/local-app')]);
+		disposables.add(createSwitcher(parent, commandService, new TestDialogService(), new StaticWorkspaceTrustRequestService(true), fileDialogService));
+
+		await timeout(0);
+
+		const branchButton = parent.querySelector('.designer-branch-switcher__branch-button') as HTMLButtonElement;
+		assert.strictEqual(branchButton.textContent?.trim(), 'Branches');
+		branchButton.click();
+		await timeout(0);
+
+		const dropdown = getOpenDropdown();
+		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__empty-title')?.textContent, 'Add a repo first');
+		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__empty-message')?.textContent, 'Branches appear after Parakit opens a repository.');
+		assert.strictEqual(dropdown.querySelector('.designer-branch-switcher__filter-input'), null);
+		assert.ok(dropdown.querySelector('.designer-branch-switcher__repo-source-input'));
+
+		const folderButton = dropdown.querySelector('.designer-branch-switcher__repo-source-folder') as HTMLButtonElement;
+		assert.strictEqual(folderButton.textContent?.trim(), 'Open local folder');
+		folderButton.click();
+		await timeout(10);
+
+		assert.deepStrictEqual(commandService.addSources, ['/workspace/local-app']);
 	});
 
 	test('closes branch dropdown and shows immediate save state when switching branches', async () => {
@@ -388,7 +457,7 @@ suite('DesignerBranchSwitcher', () => {
 		assert.deepStrictEqual(commandService.checkoutWithoutSavingRequests, ['main']);
 	});
 
-	test('repo switch uses save-first command and shows immediate save state', async () => {
+	test('repo switch uses direct switch command and shows immediate switch state', async () => {
 		const parent = document.createElement('div');
 		disposables.add({ dispose: () => parent.remove() });
 		document.body.appendChild(parent);
@@ -407,13 +476,14 @@ suite('DesignerBranchSwitcher', () => {
 
 		assert.strictEqual(getVisibleDropdown(), undefined);
 		assert.strictEqual(parent.querySelector('.designer-branch-switcher__repo-button')?.textContent?.includes('Switching to Other Repo'), true);
-		assert.deepStrictEqual(commandService.saveAndSwitchRequests, ['/workspace/other-repo']);
+		assert.deepStrictEqual(commandService.switchRequests, [{ repoPath: '/workspace/other-repo', skipSave: true }]);
+		assert.deepStrictEqual(commandService.saveAndSwitchRequests, []);
 
 		commandService.resolveSwitch();
 		await timeout(0);
 	});
 
-	test('clones pasted repo URL from repo browser', async () => {
+	test('adds pasted repo URL from repo browser', async () => {
 		const parent = document.createElement('div');
 		disposables.add({ dispose: () => parent.remove() });
 		document.body.appendChild(parent);
@@ -426,15 +496,98 @@ suite('DesignerBranchSwitcher', () => {
 		await timeout(0);
 
 		let dropdown = getOpenDropdown();
-		const input = dropdown.querySelector('.designer-branch-switcher__repo-url-input') as HTMLInputElement;
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
 		input.value = 'https://github.com/workplan/design-system.git';
 		input.dispatchEvent(new InputEvent('input', { bubbles: true }));
 		(dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).click();
 		await timeout(10);
 
-		assert.deepStrictEqual(commandService.cloneUrls, ['https://github.com/workplan/design-system.git']);
+		assert.deepStrictEqual(commandService.addSources, ['https://github.com/workplan/design-system.git']);
 		dropdown = getOpenDropdown();
 		assert.strictEqual([...dropdown.querySelectorAll('.designer-branch-switcher__repo-row')].some(row => row.textContent?.includes('Design System')), true);
+	});
+
+	test('folder picker adds selected repo source directly', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		const commandService = new DesignerSwitcherCommandService();
+		const fileDialogService = new RecordingFileDialogService([URI.file('/workspace/local-app')]);
+		disposables.add(createSwitcher(parent, commandService, new TestDialogService(), new StaticWorkspaceTrustRequestService(true), fileDialogService));
+
+		await timeout(0);
+		(parent.querySelector('.designer-branch-switcher__repo-button') as HTMLButtonElement).click();
+		await timeout(0);
+
+		const dropdown = getOpenDropdown();
+		(dropdown.querySelector('.designer-branch-switcher__repo-source-folder') as HTMLButtonElement).click();
+		await timeout(10);
+
+		assert.deepStrictEqual(commandService.addSources, ['/workspace/local-app']);
+	});
+
+	test('adds selected local folder path from repo browser', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		const commandService = new DesignerSwitcherCommandService();
+		disposables.add(createSwitcher(parent, commandService));
+
+		await timeout(0);
+		(parent.querySelector('.designer-branch-switcher__repo-button') as HTMLButtonElement).click();
+		await timeout(0);
+
+		const dropdown = getOpenDropdown();
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
+		input.value = '/workspace/local-app';
+		input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+		(dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).click();
+		await timeout(10);
+
+		assert.deepStrictEqual(commandService.addSources, ['/workspace/local-app']);
+	});
+
+	test('shows inline error when repo source add fails', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		disposables.add(createSwitcher(parent, new FailingAddSourceCommandService()));
+
+		await timeout(0);
+		(parent.querySelector('.designer-branch-switcher__repo-button') as HTMLButtonElement).click();
+		await timeout(0);
+
+		const dropdown = getOpenDropdown();
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
+		input.value = '/missing/repo';
+		input.dispatchEvent(new InputEvent('input', { bubbles: true }));
+		(dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).click();
+		await timeout(10);
+
+		assert.strictEqual(getOpenDropdown().querySelector('.designer-branch-switcher__problem')?.textContent?.includes('Folder could not be found'), true);
+	});
+
+	test('renders non-git setup action and connects current folder to remote', async () => {
+		const parent = document.createElement('div');
+		disposables.add({ dispose: () => parent.remove() });
+		document.body.appendChild(parent);
+
+		const commandService = new NonGitFolderCommandService();
+		disposables.add(createSwitcher(parent, commandService));
+
+		await timeout(0);
+		(parent.querySelector('.designer-branch-switcher__branch-button') as HTMLButtonElement).click();
+		await timeout(20);
+
+		const connect = getOpenDropdown().querySelector('.designer-branch-switcher__setup-action--connect') as HTMLButtonElement;
+		assert.ok(connect);
+		connect.click();
+		await timeout(10);
+
+		assert.strictEqual(commandService.connectRequests, 1);
 	});
 
 	test('keeps existing repos visible when adding another repo', async () => {
@@ -449,7 +602,7 @@ suite('DesignerBranchSwitcher', () => {
 		await timeout(0);
 
 		let dropdown = getOpenDropdown();
-		const input = dropdown.querySelector('.designer-branch-switcher__repo-url-input') as HTMLInputElement;
+		const input = dropdown.querySelector('.designer-branch-switcher__repo-source-input') as HTMLInputElement;
 		input.value = 'https://github.com/workplan/new-repo.git';
 		input.dispatchEvent(new InputEvent('input', { bubbles: true }));
 		(dropdown.querySelector('.designer-branch-switcher__repo-add') as HTMLButtonElement).click();
@@ -695,7 +848,7 @@ class DesignerSwitcherCommandService implements ICommandService {
 	private readonly _onDidExecuteCommand = new Emitter<ICommandEvent>();
 	readonly onDidExecuteCommand: Event<ICommandEvent> = this._onDidExecuteCommand.event;
 
-	readonly cloneUrls: string[] = [];
+	readonly addSources: string[] = [];
 
 	async executeCommand<T>(commandId: string, ...args: unknown[]): Promise<T | undefined> {
 		if (commandId === '_designerBranches.getState') {
@@ -724,18 +877,47 @@ class DesignerSwitcherCommandService implements ICommandService {
 			} as T;
 		}
 
-		if (commandId === '_designerRepos.clone') {
-			this.cloneUrls.push((args[0] as { url: string }).url);
+		if (commandId === '_designerRepos.addSource') {
+			const source = (args[0] as { source: string }).source;
+			this.addSources.push(source);
 			return {
 				currentRepoPath: '/workspace/vscode-fork',
 				repos: [
 					{ name: 'VSCode Fork', path: '/workspace/vscode-fork', status: 'ready', isCurrent: true },
-					{ name: 'Design System', path: '/workspace/design-system', status: 'ready', isCurrent: false },
+					source === '/workspace/local-app'
+						? { name: 'local-app', path: '/workspace/local-app', status: 'ready', isCurrent: false }
+						: { name: 'Design System', path: '/workspace/design-system', status: 'ready', isCurrent: false },
 				]
 			} as T;
 		}
 
 		throw new Error(`Unexpected command: ${commandId}`);
+	}
+}
+
+class EmptyRepoCommandService extends DesignerSwitcherCommandService {
+
+	override async executeCommand<T>(commandId: string, ...args: unknown[]): Promise<T | undefined> {
+		if (commandId === GetDesignerReposStateCommandId) {
+			return {
+				currentRepoPath: undefined,
+				repos: []
+			} as T;
+		}
+
+		if (commandId === '_designerBranches.getState') {
+			return {
+				projectName: 'Parakit',
+				defaultBranch: undefined,
+				currentBranch: undefined,
+				syncState: 'synced',
+				repositoryReady: false,
+				branches: [],
+				tree: []
+			} as T;
+		}
+
+		return super.executeCommand(commandId, ...args);
 	}
 }
 
@@ -905,6 +1087,7 @@ class UnsafeHostBranchSwitchCommandService extends SlowBranchSwitchCommandServic
 class SlowRepoSwitchCommandService extends DesignerSwitcherCommandService {
 
 	readonly saveAndSwitchRequests: string[] = [];
+	readonly switchRequests: { repoPath: string; skipSave: boolean | undefined }[] = [];
 	private switchResolver: (() => void) | undefined;
 
 	resolveSwitch(): void {
@@ -919,6 +1102,25 @@ class SlowRepoSwitchCommandService extends DesignerSwitcherCommandService {
 					{ name: 'VSCode Fork', path: '/workspace/vscode-fork', status: 'ready', isCurrent: true },
 					{ name: 'Other Repo', path: '/workspace/other-repo', status: 'ready', isCurrent: false },
 				]
+			} as T;
+		}
+
+		if (commandId === '_designerRepos.switch') {
+			const request = args[0] as { repoPath: string; skipSave?: boolean };
+			this.switchRequests.push({ repoPath: request.repoPath, skipSave: request.skipSave });
+			await new Promise<void>(resolve => this.switchResolver = resolve);
+			return {
+				state: {
+					currentRepoPath: request.repoPath,
+					repos: [
+						{ name: 'VSCode Fork', path: '/workspace/vscode-fork', status: 'ready', isCurrent: false },
+						{ name: 'Other Repo', path: '/workspace/other-repo', status: 'ready', isCurrent: true },
+					]
+				},
+				sync: {
+					state: 'synced',
+					targetRepoPath: request.repoPath
+				}
 			} as T;
 		}
 
@@ -958,13 +1160,59 @@ class ReplacingCloneRepoCommandService extends DesignerSwitcherCommandService {
 			} as T;
 		}
 
-		if (commandId === '_designerRepos.clone') {
-			this.cloneUrls.push((args[0] as { url: string }).url);
+		if (commandId === '_designerRepos.addSource') {
+			this.addSources.push((args[0] as { source: string }).source);
 			return {
 				currentRepoPath: '/workspace/current-repo',
 				repos: [
 					{ name: 'New Repo', path: '/workspace/new-repo', status: 'ready', isCurrent: false },
 				]
+			} as T;
+		}
+
+		return super.executeCommand(commandId, ...args);
+	}
+}
+
+class FailingAddSourceCommandService extends DesignerSwitcherCommandService {
+
+	override async executeCommand<T>(commandId: string, ...args: unknown[]): Promise<T | undefined> {
+		if (commandId === '_designerRepos.addSource') {
+			throw new Error('Folder could not be found.');
+		}
+
+		return super.executeCommand(commandId, ...args);
+	}
+}
+
+class NonGitFolderCommandService extends DesignerSwitcherCommandService {
+
+	connectRequests = 0;
+
+	override async executeCommand<T>(commandId: string, ...args: unknown[]): Promise<T | undefined> {
+		if (commandId === '_designerBranches.getState') {
+			return {
+				projectName: 'Loose Folder',
+				defaultBranch: undefined,
+				currentBranch: undefined,
+				syncState: 'problem',
+				repositoryReady: false,
+				setup: { reason: 'notGitRepository' },
+				branches: [],
+				tree: []
+			} as T;
+		}
+
+		if (commandId === '_designerRepos.connectCurrentFolderToRemote') {
+			this.connectRequests++;
+			return {
+				projectName: 'Loose Folder',
+				defaultBranch: 'main',
+				currentBranch: 'main',
+				syncState: 'synced',
+				repositoryReady: true,
+				branches: [],
+				tree: []
 			} as T;
 		}
 
@@ -1063,4 +1311,23 @@ class RecordingWorkspaceTrustRequestService extends StaticWorkspaceTrustRequestS
 		this.onRequest();
 		return true;
 	}
+}
+
+class RecordingFileDialogService implements IFileDialogService {
+	declare readonly _serviceBrand: undefined;
+
+	constructor(private readonly openDialogResult: URI[] | undefined = undefined) { }
+
+	async defaultFilePath(): Promise<URI> { return URI.file('/'); }
+	async defaultFolderPath(): Promise<URI> { return URI.file('/'); }
+	async defaultWorkspacePath(): Promise<URI> { return URI.file('/'); }
+	async preferredHome(): Promise<URI> { return URI.file('/'); }
+	async pickFileFolderAndOpen(_options: IPickAndOpenOptions): Promise<void> { }
+	async pickFileAndOpen(_options: IPickAndOpenOptions): Promise<void> { }
+	async pickFolderAndOpen(_options: IPickAndOpenOptions): Promise<void> { }
+	async pickWorkspaceAndOpen(_options: IPickAndOpenOptions): Promise<void> { }
+	async pickFileToSave(): Promise<URI | undefined> { return undefined; }
+	async showSaveDialog(_options: ISaveDialogOptions): Promise<URI | undefined> { return undefined; }
+	async showOpenDialog(_options: IOpenDialogOptions): Promise<URI[] | undefined> { return this.openDialogResult; }
+	async showSaveConfirm(): Promise<ConfirmResult> { return ConfirmResult.CANCEL; }
 }

@@ -8,6 +8,7 @@ import { Disposable } from '../../../../base/common/lifecycle.js';
 import { URI } from '../../../../base/common/uri.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { ICommandService } from '../../../../platform/commands/common/commands.js';
+import { IContextKey, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
 import { IFileService } from '../../../../platform/files/common/files.js';
 import { createDecorator } from '../../../../platform/instantiation/common/instantiation.js';
 import { INotificationService, Severity } from '../../../../platform/notification/common/notification.js';
@@ -19,6 +20,7 @@ import { ISearchService, ITextSearchMatch, isFileMatch, QueryType } from '../../
 
 export const BROWSER_DESIGN_ELEMENT_VIEW_ID = 'browser.designElement';
 export const BROWSER_DESIGN_ELEMENT_CONTAINER_ID = 'browser-design-element-sidebar';
+export const BROWSER_DESIGN_ELEMENT_SELECTED_CONTEXT = new RawContextKey<boolean>('browserDesignElementSelected', false, localize('browserDesignElementSelected', "Whether a browser design element is selected for inspection"));
 export const DESIGN_ELEMENT_NOTIFICATION_SOURCE = { id: 'browser.designElement', label: localize('designElementSource', "Design element") };
 
 export const IBrowserDesignElementService = createDecorator<IBrowserDesignElementService>('browserDesignElementService');
@@ -30,7 +32,7 @@ export interface IBrowserDesignElementService {
 	readonly selection: IDesignElementSelection | undefined;
 	readonly propertyGroups: readonly IDesignElementPropertyGroup[];
 	readonly inspectionActive: boolean;
-	inspectElement(elementData: IElementData): Promise<void>;
+	inspectElement(elementData: IElementData): Promise<IDesignElementInspectionResult>;
 	closeInspection(): void;
 	sendToClaudeCode(sessionResource?: URI): Promise<void>;
 }
@@ -61,6 +63,11 @@ export interface IDesignElementPropertyGroup {
 	readonly id: 'source' | 'code' | 'tokens' | 'typography' | 'spacing' | 'layout' | 'color' | 'border' | 'other';
 	readonly label: string;
 	readonly properties: readonly IDesignElementProperty[];
+}
+
+export interface IDesignElementInspectionResult {
+	readonly selection: IDesignElementSelection;
+	readonly propertyGroups: readonly IDesignElementPropertyGroup[];
 }
 
 export interface IDesignElementAttributeRow {
@@ -170,9 +177,9 @@ export function resolveDesignElementProperties(selection: IDesignElementSelectio
 	const groups: IDesignElementPropertyGroup[] = [];
 	const computedStyles = selection.computedStyles;
 
-	const reactComponentProperties = getReactComponentProperties(selection);
+	const componentProperties = getComponentProperties(selection);
 	const matchedStyleProperties = getMatchedStyleProperties(selection);
-	const sourceBackedProperties = [...reactComponentProperties, ...matchedStyleProperties, ...sourceProperties];
+	const sourceBackedProperties = [...componentProperties, ...matchedStyleProperties, ...sourceProperties];
 	if (sourceBackedProperties.length) {
 		groups.push({ id: 'source', label: localize('designElementSourceMatches', "Source matches"), properties: sourceBackedProperties.slice(0, 12) });
 	}
@@ -242,12 +249,12 @@ function getMatchedStyleProperties(selection: IDesignElementSelection): readonly
 	return properties;
 }
 
-function getReactComponentProperties(selection: IDesignElementSelection): readonly IDesignElementProperty[] {
+function getComponentProperties(selection: IDesignElementSelection): readonly IDesignElementProperty[] {
 	const properties: IDesignElementProperty[] = [];
-	for (const component of selection.elementData.reactComponents ?? []) {
-		const propSummary = formatReactPropSummary(component.props);
+	for (const component of selection.elementData.components ?? []) {
+		const propSummary = formatComponentPropSummary(component.props);
 		properties.push({
-			name: component.source ? localize('designElementPackageComponent', "package component") : localize('designElementReactComponent', "component"),
+			name: component.source ? localize('designElementPackageComponent', "package component") : localize('designElementComponent', "component"),
 			value: component.source ? `${component.name} from ${component.source}` : component.name,
 			source: 'source',
 			token: propSummary
@@ -256,7 +263,7 @@ function getReactComponentProperties(selection: IDesignElementSelection): readon
 	return properties.slice(0, 12);
 }
 
-function formatReactPropSummary(props: readonly { readonly name: string; readonly value: string }[] | undefined): string | undefined {
+function formatComponentPropSummary(props: readonly { readonly name: string; readonly value: string }[] | undefined): string | undefined {
 	if (!props?.length) {
 		return undefined;
 	}
@@ -435,8 +442,8 @@ function getSourceEvidence(selection: IDesignElementSelection): readonly ISource
 		}
 	}
 
-	for (const component of selection.elementData.reactComponents ?? []) {
-		add(component.name, localize('designElementSourceReactComponent', "component"), component.source ? 12 : 10);
+	for (const component of selection.elementData.components ?? []) {
+		add(component.name, localize('designElementSourceComponent', "component"), component.source ? 12 : 10);
 		if (component.source) {
 			add(component.source, localize('designElementSourcePackage', "package"), 12);
 		}
@@ -514,6 +521,7 @@ export class BrowserDesignElementService extends Disposable implements IBrowserD
 	private _propertyGroups: readonly IDesignElementPropertyGroup[] = [];
 	private _inspectionActive = false;
 	private _workspaceTokens: Promise<Map<string, readonly string[]>> | undefined;
+	private readonly _selectedContext: IContextKey<boolean>;
 
 	get selection(): IDesignElementSelection | undefined {
 		return this._selection;
@@ -535,13 +543,16 @@ export class BrowserDesignElementService extends Disposable implements IBrowserD
 		@IWorkspaceContextService private readonly workspaceContextService: IWorkspaceContextService,
 		@IFileService private readonly fileService: IFileService,
 		@ISearchService private readonly searchService: ISearchService,
+		@IContextKeyService contextKeyService: IContextKeyService,
 	) {
 		super();
+		this._selectedContext = BROWSER_DESIGN_ELEMENT_SELECTED_CONTEXT.bindTo(contextKeyService);
 	}
 
-	async inspectElement(elementData: IElementData): Promise<void> {
+	async inspectElement(elementData: IElementData): Promise<IDesignElementInspectionResult> {
 		const selection = createDesignElementSelection(elementData);
 		this._selection = selection;
+		this._selectedContext.set(true);
 		this._setInspectionActive(true);
 		const [workspaceTokens, sourceProperties] = await Promise.all([
 			this._getWorkspaceTokens(),
@@ -551,9 +562,12 @@ export class BrowserDesignElementService extends Disposable implements IBrowserD
 		this._onDidChangeSelection.fire(selection);
 
 		await this.viewsService.openView(BROWSER_DESIGN_ELEMENT_VIEW_ID, true);
+
+		return { selection, propertyGroups: this._propertyGroups };
 	}
 
 	closeInspection(): void {
+		this._selectedContext.set(false);
 		this._setInspectionActive(false);
 	}
 
@@ -639,7 +653,9 @@ export class BrowserDesignElementService extends Disposable implements IBrowserD
 
 		const content = await this.fileService.readFile(uri, { limits: { size: 200_000 } });
 		const text = content.value.toString();
-		for (const definition of extractDesignElementTokenDefinitions(text)) {
+		const structured = parseStructuredTokenFile(text, uri.path);
+		const definitions = structured.length ? structured : extractDesignElementTokenDefinitions(text);
+		for (const definition of definitions) {
 			addToken(tokens, definition.value, definition.name);
 		}
 	}
@@ -741,6 +757,52 @@ export class BrowserDesignElementService extends Disposable implements IBrowserD
 interface ITokenDefinition {
 	readonly name: string;
 	readonly value: string;
+}
+
+const structuredTokenValuePattern = /^(?:#[\da-fA-F]{3,8}|-?\d+(?:\.\d+)?(?:px|rem|em|%)|rgb[a]?\([^)]+\))$/;
+
+export function parseStructuredTokenFile(text: string, filePath: string): readonly ITokenDefinition[] {
+	if (!filePath.toLowerCase().endsWith('.json')) {
+		return [];
+	}
+
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(text);
+	} catch {
+		return [];
+	}
+
+	if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+		return [];
+	}
+
+	const definitions: ITokenDefinition[] = [];
+	const walk = (node: unknown, path: readonly string[]): void => {
+		if (!node || typeof node !== 'object' || Array.isArray(node)) {
+			return;
+		}
+
+		const record = node as Record<string, unknown>;
+		if (typeof record.$value === 'string' && path.length) {
+			definitions.push({ name: path.join('.'), value: record.$value });
+			return;
+		}
+
+		for (const [key, value] of Object.entries(record)) {
+			if (key.startsWith('$')) {
+				continue;
+			}
+			if (typeof value === 'string' && structuredTokenValuePattern.test(value)) {
+				definitions.push({ name: [...path, key].join('.'), value });
+			} else if (value && typeof value === 'object') {
+				walk(value, [...path, key]);
+			}
+		}
+	};
+
+	walk(parsed, []);
+	return definitions;
 }
 
 export function extractDesignElementTokenDefinitions(text: string): readonly ITokenDefinition[] {

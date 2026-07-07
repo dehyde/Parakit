@@ -377,6 +377,7 @@ import './contrib/themes/browser/themes.contribution.js';
 
 // Update
 import './contrib/update/browser/update.contribution.js';
+import './contrib/alphaUpdate/browser/alphaUpdate.contribution.js';
 
 // Surveys
 import './contrib/surveys/browser/nps.contribution.js';
@@ -385,6 +386,7 @@ import './contrib/surveys/browser/languageSurveys.contribution.js';
 // Welcome
 import './contrib/welcomeGettingStarted/browser/gettingStarted.contribution.js';
 import './contrib/welcomeAgentSessions/browser/agentSessionsWelcome.contribution.js';
+import './contrib/welcomeEmptyRepo/browser/emptyRepoFtux.contribution.js';
 import './contrib/welcomeWalkthrough/browser/walkThrough.contribution.js';
 import './contrib/welcomeViews/common/viewsWelcome.contribution.js';
 import './contrib/welcomeViews/common/newFile.contribution.js';

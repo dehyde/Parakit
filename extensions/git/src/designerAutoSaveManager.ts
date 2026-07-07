@@ -3,8 +3,8 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { Disposable, Event, EventEmitter, l10n, LogOutputChannel, Memento, window, workspace } from 'vscode';
-import { DesignerAutoSaveCommitMessage, DesignerAutoSaveIdleDelayMs, DesignerAutoSaveLocalReminderCommitCount, DesignerAutoSaveMaxDelayMs, DesignerAutoSaveScheduler, DesignerAutoSaveTrigger, getDesignerAutoSavePolicy, isDesignerBranchName } from './designerAutoSave';
+import { commands, Disposable, Event, EventEmitter, l10n, LogOutputChannel, Memento, window, workspace } from 'vscode';
+import { DesignerAutoSaveBranchKind, DesignerAutoSaveCommitMessage, DesignerAutoSaveIdleDelayMs, DesignerAutoSaveMaxDelayMs, DesignerAutoSaveScheduler, DesignerAutoSaveTrigger, DesignerMainlineManualRemoteApprovalText, getDesignerAutoSavePolicy, isDesignerBranchName, isDesignerMainlineBranchName } from './designerAutoSave';
 import { Model } from './model';
 import { Repository } from './repository';
 import { isDescendant } from './util';
@@ -18,6 +18,7 @@ export interface DesignerAutoSaveResult {
 	readonly committed: boolean;
 	readonly pushed: boolean;
 	readonly pushFailed: boolean;
+	readonly manualCommitRequired?: boolean;
 	readonly message?: string;
 }
 
@@ -31,12 +32,13 @@ export class DesignerAutoSaveManager implements Disposable {
 	private readonly disposables: Disposable[] = [];
 	private readonly repositories = new Map<Repository, RepositoryAutoSaveState>();
 	private readonly cloudProblems = new Map<string, DesignerCloudProblem>();
+	private readonly manualCommitReminders = new Set<string>();
 	private readonly _onDidChangeCloudProblems = new EventEmitter<void>();
 	readonly onDidChangeCloudProblems: Event<void> = this._onDidChangeCloudProblems.event;
 
 	constructor(
 		private readonly model: Model,
-		private readonly globalState: Memento,
+		_globalState: Memento,
 		private readonly logger: LogOutputChannel
 	) {
 		for (const repository of this.model.repositories) {
@@ -73,6 +75,18 @@ export class DesignerAutoSaveManager implements Disposable {
 				throw new Error(l10n.t('Resolve merge conflicts before saving.'));
 			}
 
+			if (!policy.commit) {
+				if (options.background && policy.promptForManualCommit) {
+					this.recordManualCommitRequired(repository, branchName);
+				}
+
+				if (!options.background) {
+					throw new Error(getDesignerManualCommitRequiredMessage(policy.branchKind, branchName));
+				}
+
+				return { branchName, committed: false, pushed: false, pushFailed: false, manualCommitRequired: true };
+			}
+
 			const resources = [
 				...repository.workingTreeGroup.resourceStates.map(resource => resource.resourceUri),
 				...repository.untrackedGroup.resourceStates.map(resource => resource.resourceUri)
@@ -92,10 +106,6 @@ export class DesignerAutoSaveManager implements Disposable {
 		}
 
 		if (!policy.push) {
-			if (committed && policy.branchKind === 'shared') {
-				this.recordLocalOnlyCommit(repository, branchName);
-			}
-
 			return { branchName, committed, pushed: false, pushFailed: false };
 		}
 
@@ -128,9 +138,14 @@ export class DesignerAutoSaveManager implements Disposable {
 			return true;
 		}
 
+		const policy = getDesignerAutoSavePolicy(branchName, 'manualRemote');
+		if (this.hasChanges(repository)) {
+			throw new Error(getDesignerManualCommitRequiredMessage(policy.branchKind, branchName));
+		}
+
 		const publish = l10n.t('Publish to Shared Branch');
 		const result = await window.showWarningMessage(
-			l10n.t('This will publish your local auto-save commits to "{0}", a shared branch that engineers may depend on. Only continue if you understand this can change code other people are using.', branchName),
+			l10n.t('This will publish your local commits to "{0}", a shared branch that engineers may depend on. Only continue if you understand this can change code other people are using.', branchName),
 			{ modal: true },
 			publish
 		);
@@ -139,8 +154,30 @@ export class DesignerAutoSaveManager implements Disposable {
 			return false;
 		}
 
-		await this.save(repository, 'manualRemote', { branchName, remoteConfirmed: true });
+		const mainlineApproved = isDesignerMainlineBranchName(branchName)
+			? await this.confirmMainlineRemotePublish(branchName)
+			: false;
+		const remotePolicy = getDesignerAutoSavePolicy(branchName, 'manualRemote', true, mainlineApproved);
+		if (!remotePolicy.push) {
+			return false;
+		}
+
+		await this.pushCurrentBranch(repository, branchName);
+		this.clearCloudProblem(repository.root, branchName);
 		return true;
+	}
+
+	private async confirmMainlineRemotePublish(branchName: string): Promise<boolean> {
+		const result = await window.showInputBox({
+			prompt: l10n.t('Type "{0}" to publish "{1}" to the remote.', DesignerMainlineManualRemoteApprovalText, branchName),
+			placeHolder: DesignerMainlineManualRemoteApprovalText,
+			ignoreFocusOut: true,
+			validateInput: value => value === DesignerMainlineManualRemoteApprovalText
+				? null
+				: l10n.t('Type "{0}" exactly to continue.', DesignerMainlineManualRemoteApprovalText)
+		});
+
+		return result === DesignerMainlineManualRemoteApprovalText;
 	}
 
 	dispose(): void {
@@ -192,9 +229,15 @@ export class DesignerAutoSaveManager implements Disposable {
 			return;
 		}
 
-		if (this.hasChanges(repository)) {
-			this.repositories.get(repository)?.scheduler.markDirty();
+		const branchName = repository.HEAD?.name;
+		if (!this.hasChanges(repository)) {
+			if (branchName) {
+				this.clearManualCommitReminder(repository.root, branchName);
+			}
+			return;
 		}
+
+		this.repositories.get(repository)?.scheduler.markDirty();
 	}
 
 	private async runBackgroundSave(repository: Repository): Promise<void> {
@@ -261,40 +304,32 @@ export class DesignerAutoSaveManager implements Disposable {
 		}
 	}
 
-	private recordLocalOnlyCommit(repository: Repository, branchName: string): void {
-		const suppressedKey = this.getLocalReminderSuppressedKey(repository.root);
-		if (this.globalState.get<boolean>(suppressedKey)) {
+	private recordManualCommitRequired(repository: Repository, branchName: string): void {
+		const key = this.getManualCommitReminderKey(repository.root, branchName);
+		if (this.manualCommitReminders.has(key)) {
 			return;
 		}
 
-		const countKey = this.getLocalReminderCountKey(repository.root, branchName);
-		const count = this.globalState.get<number>(countKey, 0) + 1;
-		this.globalState.update(countKey, count);
-
-		if (count < DesignerAutoSaveLocalReminderCommitCount) {
-			return;
-		}
-
-		this.globalState.update(countKey, 0);
-		this.showLocalOnlyReminder(repository, branchName).catch(error => {
+		this.manualCommitReminders.add(key);
+		this.showManualCommitRequiredReminder(branchName).catch(error => {
 			window.showErrorMessage(getDesignerAutoSaveErrorMessage(error));
 		});
 	}
 
-	private async showLocalOnlyReminder(repository: Repository, branchName: string): Promise<void> {
-		const push = l10n.t('Publish to Cloud');
-		const dontShowAgain = l10n.t('Don\'t Show Again');
+	private async showManualCommitRequiredReminder(branchName: string): Promise<void> {
+		const openSourceControl = l10n.t('Open Source Control');
 		const result = await window.showInformationMessage(
-			l10n.t('Auto-save is committing locally on "{0}". Publish manually if this shared branch should be updated in the cloud.', branchName),
-			push,
-			dontShowAgain
+			l10n.t('Parakit does not auto-commit on "{0}". Commit changes manually from Source Control when ready.', branchName),
+			openSourceControl
 		);
 
-		if (result === push) {
-			await this.pushSharedBranchWithConfirmation(repository);
-		} else if (result === dontShowAgain) {
-			this.globalState.update(this.getLocalReminderSuppressedKey(repository.root), true);
+		if (result === openSourceControl) {
+			await commands.executeCommand('workbench.view.scm');
 		}
+	}
+
+	private clearManualCommitReminder(repositoryRoot: string, branchName: string): void {
+		this.manualCommitReminders.delete(this.getManualCommitReminderKey(repositoryRoot, branchName));
 	}
 
 	private setCloudProblem(repositoryRoot: string, branchName: string, message: string): void {
@@ -312,12 +347,8 @@ export class DesignerAutoSaveManager implements Disposable {
 		return `${repositoryRoot}\0${branchName}`;
 	}
 
-	private getLocalReminderCountKey(repositoryRoot: string, branchName: string): string {
-		return `designer.autoSave.localOnlyReminder.count.${repositoryRoot}.${branchName}`;
-	}
-
-	private getLocalReminderSuppressedKey(repositoryRoot: string): string {
-		return `designer.autoSave.localOnlyReminder.suppressed.${repositoryRoot}`;
+	private getManualCommitReminderKey(repositoryRoot: string, branchName: string): string {
+		return `${repositoryRoot}\0${branchName}`;
 	}
 }
 
@@ -327,4 +358,12 @@ function getDesignerAutoSaveErrorMessage(error: unknown): string {
 	}
 
 	return String(error);
+}
+
+function getDesignerManualCommitRequiredMessage(branchKind: DesignerAutoSaveBranchKind, branchName: string): string {
+	if (branchKind === 'mainline') {
+		return l10n.t('Parakit will not commit on "{0}". Move changes to a design branch or commit manually before continuing.', branchName);
+	}
+
+	return l10n.t('Parakit does not auto-commit on "{0}". Commit changes manually before continuing.', branchName);
 }

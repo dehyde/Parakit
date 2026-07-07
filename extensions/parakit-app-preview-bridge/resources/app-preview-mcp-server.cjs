@@ -72,6 +72,21 @@ const TOOL_DEFINITIONS = [
 		},
 	},
 	{
+		name: 'inspect_app_preview_element',
+		description: 'Inspect an element inside Parakit App Preview: returns component identity, matched CSS rules, resolved design evidence, and optional forced interactive-state styles. Use read_app_preview first to identify refs or selectors.',
+		inputSchema: {
+			type: 'object',
+			properties: {
+				ref: { type: 'string' },
+				selector: { type: 'string' },
+				states: {
+					type: 'array',
+					items: { type: 'string', enum: ['hover', 'focus', 'focus-visible', 'focus-within', 'active', 'target', 'visited'] },
+				},
+			},
+		},
+	},
+	{
 		name: 'type_in_app_preview',
 		description: 'Type text or press a key inside Parakit App Preview.',
 		inputSchema: {

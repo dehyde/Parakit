@@ -1,6 +1,7 @@
 {
 	"nameShort": "Parakit",
 	"nameLong": "Parakit",
+	"quality": "stable",
 	"applicationName": "code-oss",
 	"dataFolderName": ".vscode-oss",
 	"sharedDataFolderName": ".vscode-oss-shared",
@@ -34,6 +35,10 @@
 	"nodejsRepository": "https://nodejs.org",
 	"urlProtocol": "code-oss",
 	"agentsTelemetryAppName": "agents",
+	"alphaUpdate": {
+		"enabled": true,
+		"feedUrl": "https://github.com/dehyde/Parakit/releases/download/parakit-alpha/latest.json"
+	},
 	"webviewContentExternalBaseUrlTemplate": "https://{{uuid}}.vscode-cdn.net/insider/ef65ac1ba57f57f2a3961bfe94aa20481caca4c6/out/vs/workbench/contrib/webview/browser/pre/",
 	"extensionsGallery": {
 		"serviceUrl": "https://marketplace.visualstudio.com/_apis/public/gallery",

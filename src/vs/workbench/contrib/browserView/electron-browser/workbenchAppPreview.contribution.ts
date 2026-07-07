@@ -3,48 +3,58 @@
  *  Licensed under the MIT License. See License.txt in the project root for license information.
  *--------------------------------------------------------------------------------------------*/
 
-import { disposableTimeout, RunOnceScheduler } from '../../../../base/common/async.js';
+import { disposableTimeout, RunOnceScheduler, timeout } from '../../../../base/common/async.js';
 import { mainWindow } from '../../../../base/browser/window.js';
 import { $, addDisposableListener, EventType } from '../../../../base/browser/dom.js';
 import { encodeBase64, VSBuffer } from '../../../../base/common/buffer.js';
 import { CancellationToken } from '../../../../base/common/cancellation.js';
 import { Codicon } from '../../../../base/common/codicons.js';
-import { hash } from '../../../../base/common/hash.js';
+import { Emitter, Event } from '../../../../base/common/event.js';
+import { hash, hashAsync } from '../../../../base/common/hash.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { dirname, joinPath } from '../../../../base/common/resources.js';
 import { URI } from '../../../../base/common/uri.js';
 import { localize, localize2 } from '../../../../nls.js';
 import { Action2, registerAction2 } from '../../../../platform/actions/common/actions.js';
-import { BrowserViewKind, IBrowserViewLoadingEvent, IBrowserViewLoadError } from '../../../../platform/browserView/common/browserView.js';
+import { BrowserViewKind, IElementData, IBrowserViewLoadingEvent, IBrowserViewLoadError } from '../../../../platform/browserView/common/browserView.js';
+import { CDPEvent, CDPRequest, CDPResponse, CDPTargetInfo, ICDPConnection } from '../../../../platform/browserView/common/cdp/types.js';
+import { extractNodeData } from '../../../../platform/browserView/common/cdpElementExtraction.js';
 import { IPlaywrightService } from '../../../../platform/browserView/common/playwrightService.js';
 import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
 import { IEditorOptions } from '../../../../platform/editor/common/editor.js';
 import { IEnvironmentService } from '../../../../platform/environment/common/environment.js';
-import { FileChangeType, IFileService } from '../../../../platform/files/common/files.js';
+import { FileChangeType, IFileService, type IFileStat } from '../../../../platform/files/common/files.js';
 import { ILocalGitService } from '../../../../platform/git/common/localGitService.js';
 import { ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
 import { ILogService } from '../../../../platform/log/common/log.js';
 import { INativeHostService } from '../../../../platform/native/common/native.js';
 import { IQuickInputService } from '../../../../platform/quickinput/common/quickInput.js';
 import { IStorageService, StorageScope, StorageTarget } from '../../../../platform/storage/common/storage.js';
+import { ICommandDetectionCapability, ITerminalCommand, TerminalCapability } from '../../../../platform/terminal/common/capabilities/capabilities.js';
+import { PromptInputState } from '../../../../platform/terminal/common/capabilities/commandDetection/promptInputModel.js';
 import { TerminalLocation } from '../../../../platform/terminal/common/terminal.js';
 import { IWorkspaceContextService } from '../../../../platform/workspace/common/workspace.js';
+import { generateUuid } from '../../../../base/common/uuid.js';
 import { registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
 import { IEditorGroupsService } from '../../../services/editor/common/editorGroupsService.js';
 import { IEditorService } from '../../../services/editor/common/editorService.js';
+import { DesignerAddRepoChoice, GetDesignerReposStateCommandId, shouldShowDesignerEmptyRepoFtux, ShowDesignerAddRepoCommandId, type DesignerRepoState } from '../../../services/workspaces/common/designerRepoCommands.js';
 import { CountTokensCallback, ILanguageModelToolsService, IToolData, IToolImpl, IToolInvocation, IToolInvocationPreparationContext, IToolResult, IPreparedToolInvocation, ToolDataSource, ToolProgress } from '../../chat/common/tools/languageModelToolsService.js';
 import { IChatSessionsService } from '../../chat/common/chatSessionsService.js';
 import { ITerminalInstance, ITerminalService } from '../../terminal/browser/terminal.js';
 import { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCommandId } from '../common/appPreviewCommands.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures } from '../common/appPreviewConfig.js';
-import { createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
+import { adaptWorkbenchAppPreviewUrlToPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getDefaultPreviewUrl, getPreviewBranchUrl, getPreviewUrlForBranch, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, IPreviewConfig, IResolvedWorkbenchAppPreviewDevConfig, isWorkbenchAppPreviewLoopbackUrl, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, IWorkbenchAppPreviewBranchRuntime, IWorkbenchAppPreviewDevConfig, IWorkbenchAppPreviewEnv, IWorkbenchAppPreviewHomeTarget, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, parseWorkbenchAppPreviewRsbuildConfig, resolveWorkbenchAppPreviewAdvertisedNavigationUrl, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewDevServerTarget, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewInstallOutcome, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewFixedPortAction, resolveWorkbenchAppPreviewHealthFromSignals, IWorkbenchAppPreviewPortOwner, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldForceNavigateWorkbenchAppPreview, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, shouldSkipWorkbenchAppPreviewAutoStart, WorkbenchAppPreviewHealthState, WorkbenchAppPreviewServerState, WorkbenchAppPreviewTargetPreviewSource } from '../common/appPreviewConfig.js';
+import { detectWorkbenchAppPreviewPackageManager, resolveWorkbenchAppPreviewDependencyArtifactMtime, resolveWorkbenchAppPreviewDependencyReadiness, resolveWorkbenchAppPreviewPackageManagerInstallCommand, resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix, shouldBackfillWorkbenchAppPreviewInstallHashMarker } from '../common/appPreviewPackageManager.js';
+import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, IWorkbenchAppPreviewStartupPageState, IWorkbenchAppPreviewStartupStage, WorkbenchAppPreviewStartupPhase, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT as PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../common/appPreviewStartupPage.js';
 import { extractHttpUrls, extractLocalhostUrls, normalizeHttpUrl } from '../common/appPreviewUrl.js';
 import { BrowserEditorInput } from '../common/browserEditorInput.js';
-import { IBrowserViewWorkbenchService } from '../common/browserView.js';
+import { IBrowserViewCDPService, IBrowserViewWorkbenchService } from '../common/browserView.js';
+import { IBrowserDesignElementService, IDesignElementPropertyGroup } from '../common/browserDesignElementService.js';
 import { playwrightInvokeRaw } from './tools/browserToolHelpers.js';
 
 const APP_PREVIEW_ID_PREFIX = 'workbench-app-preview-';
+const APP_PREVIEW_EMPTY_REPO_ID = 'workbench-app-preview-empty-repo';
 const APP_PREVIEW_URL_STORAGE_KEY = 'workbench.appPreview.url';
 const APP_PREVIEW_OVERRIDES_STORAGE_KEY = 'workbench.appPreview.overrides';
 const APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY = 'workbench.appPreview.branchRuntime';
@@ -57,11 +67,54 @@ const AGENT_LOG_INITIAL_READ_LIMIT = 64 * 1024;
 const AGENT_LOG_SCAN_DELAY = 500;
 const APP_PREVIEW_PLAYWRIGHT_SESSION_ID = 'workbench-app-preview';
 const MAX_PORT_CONFLICT_RECOVERY_ATTEMPTS = 3;
+const PREVIEW_PORT_RELEASE_TIMEOUT = 4_000;
+const PREVIEW_PORT_POLL_INTERVAL = 200;
 const MAX_BACKGROUND_HEALTH_FAILURES = 3;
 const MAX_BACKGROUND_RESTART_ATTEMPTS = 3;
 const PREVIEW_STARTUP_HEALTH_INTERVAL = 1_000;
 const PREVIEW_HEALTH_FETCH_TIMEOUT = 5_000;
+const PREVIEW_RENDER_PROBE_TIMEOUT = 2_500;
 const PREVIEW_SERVER_OUTPUT_LIMIT = 24 * 1024;
+const PREVIEW_COREPACK_PROBE_TIMEOUT = 5_000;
+const PREVIEW_DEPENDENCY_INSTALL_TIMEOUT = 5 * 60_000;
+// Once an install has been running longer than the timeout above, it is only reported as slow -
+// never killed. This interval controls how often we re-check whether it has since finished, or
+// whether this start has been superseded (e.g. by an explicit restart) or the terminal actually
+// exited, while we keep waiting for it in the background.
+const PREVIEW_DEPENDENCY_INSTALL_WATCHDOG_INTERVAL = 5_000;
+const PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT = 3_000;
+const APP_PREVIEW_INSTALL_HASH_MARKER = '.parakit-install-hash';
+const APP_PREVIEW_LOCKFILE_HASH_VERSION = 'v1';
+const APP_PREVIEW_LOCKFILE_PATHS = [
+	'package-lock.json',
+	'npm-shrinkwrap.json',
+	'pnpm-lock.yaml',
+	'yarn.lock',
+	'bun.lock',
+	'bun.lockb',
+];
+const PREVIEW_TERMINAL_READY_TIMEOUT = 10_000;
+const PREVIEW_TERMINAL_READY_ATTEMPTS = 2;
+const PREVIEW_STATIC_HTML_INDEX_DIRS = ['', 'docs', 'public', 'dist', 'build', 'site', 'out'];
+const PREVIEW_RSBUILD_CONFIG_PATHS = [
+	'rsbuild.config.ts',
+	'rsbuild.config.mts',
+	'rsbuild.config.cts',
+	'rsbuild.config.js',
+	'rsbuild.config.mjs',
+	'rsbuild.config.cjs',
+];
+const PREVIEW_STATIC_HTML_SCAN_DIRS: readonly { readonly dir: string; readonly depth: number }[] = [
+	{ dir: '', depth: 0 },
+	{ dir: 'docs', depth: 2 },
+	{ dir: 'public', depth: 2 },
+	{ dir: 'static', depth: 2 },
+	{ dir: 'dist', depth: 2 },
+	{ dir: 'build', depth: 2 },
+	{ dir: 'site', depth: 2 },
+	{ dir: 'out', depth: 2 },
+];
+const PREVIEW_STATIC_HTML_SCAN_LIMIT = 80;
 
 export const ConfigureWorkbenchAppPreviewUrlCommandId = 'workbench.action.agentSessions.configureAppPreviewUrl';
 export const ClearWorkbenchAppPreviewOverrideCommandId = 'workbench.action.appPreview.clearOverride';
@@ -74,6 +127,7 @@ export { NavigateWorkbenchAppPreviewHomeCommandId, PickWorkbenchAppPreviewHomeCo
 export const ReadWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.readPage';
 export const ScreenshotWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.screenshot';
 export const ClickWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.click';
+export const InspectElementWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.inspectElement';
 export const TypeWorkbenchAppPreviewCommandId = 'workbench.action.appPreview.type';
 export const PreflightDesignerWorkspaceContextCommandId = '_designerWorkspaceContext.preflight';
 export const DesignerWorkspaceContextChangedCommandId = '_designerWorkspaceContext.didChange';
@@ -110,8 +164,8 @@ interface IAppPreviewBranchRuntimeStore {
 	[repo: string]: Record<string, IWorkbenchAppPreviewBranchRuntime> | undefined;
 }
 
-type PreviewServerState = 'stopped' | 'starting' | 'running' | 'failed';
-type PreviewHealthState = 'unknown' | 'healthy' | 'unhealthy';
+type PreviewServerState = WorkbenchAppPreviewServerState;
+type PreviewHealthState = WorkbenchAppPreviewHealthState;
 
 interface IPreviewServerStatus {
 	state: PreviewServerState;
@@ -129,6 +183,17 @@ interface IAppPreviewCommandStatus extends IPreviewServerStatus {
 	pageId?: string;
 	title?: string;
 	currentUrl?: string;
+}
+
+interface IPreviewTerminalCommandResult {
+	exitCode?: number;
+	output?: string;
+	timedOut?: boolean;
+}
+
+interface IPreviewTerminalSentinel {
+	value: string;
+	resolve(result: IPreviewTerminalCommandResult): void;
 }
 
 type PreviewStartupPhase = WorkbenchAppPreviewStartupPhase;
@@ -162,6 +227,94 @@ interface IAppPreviewScreenshotCommandArgs {
 	selector?: string;
 	element?: string;
 	scrollIntoViewIfNeeded?: boolean;
+}
+
+interface IAppPreviewInspectElementCommandArgs {
+	ref?: string;
+	selector?: string;
+	states?: readonly string[];
+}
+
+type IAppPreviewInspectElementResult = IElementData & {
+	readonly propertyGroups: readonly IDesignElementPropertyGroup[];
+};
+
+interface ICDPRequestSequence {
+	value: number;
+}
+
+function isCDPResponse(message: CDPResponse | CDPEvent): message is CDPResponse {
+	return typeof (message as CDPResponse).id === 'number';
+}
+
+function nextCDPRequestId(sequence: ICDPRequestSequence): number {
+	const id = sequence.value;
+	sequence.value++;
+	return id;
+}
+
+async function sendAppPreviewCDPCommand(
+	browserViewCDPService: IBrowserViewCDPService,
+	groupId: string,
+	store: DisposableStore,
+	sequence: ICDPRequestSequence,
+	method: string,
+	params?: unknown,
+	sessionId?: string
+): Promise<unknown> {
+	const id = nextCDPRequestId(sequence);
+	return new Promise<unknown>((resolve, reject) => {
+		const listener = browserViewCDPService.onCDPMessage(groupId)(message => {
+			if (!isCDPResponse(message) || message.id !== id) {
+				return;
+			}
+			listener.dispose();
+			if (message.error) {
+				reject(new Error(message.error.message));
+				return;
+			}
+			resolve(message.result ?? {});
+		});
+		store.add(listener);
+
+		const request: CDPRequest = { id, method, params, sessionId };
+		browserViewCDPService.sendCDPMessage(groupId, request).catch(error => {
+			listener.dispose();
+			reject(error);
+		});
+	});
+}
+
+class AppPreviewCDPConnection extends Disposable implements ICDPConnection {
+	private readonly _onEvent = this._register(new Emitter<CDPEvent>());
+	readonly onEvent: Event<CDPEvent> = this._onEvent.event;
+
+	private readonly _onClose = this._register(new Emitter<void>());
+	readonly onClose: Event<void> = this._onClose.event;
+
+	constructor(
+		private readonly browserViewCDPService: IBrowserViewCDPService,
+		private readonly groupId: string,
+		private readonly store: DisposableStore,
+		private readonly sequence: ICDPRequestSequence,
+		readonly sessionId: string,
+		readonly targetId: string
+	) {
+		super();
+		this._register(browserViewCDPService.onCDPMessage(groupId)(message => {
+			if (isCDPResponse(message) || message.sessionId !== this.sessionId) {
+				return;
+			}
+			this._onEvent.fire(message);
+		}));
+		this._register(browserViewCDPService.onDidDestroy(groupId)(() => {
+			this._onClose.fire();
+		}));
+	}
+
+	sendCommand(method: string, params?: unknown, sessionId: string | undefined = this.sessionId): Promise<unknown> {
+		return sendAppPreviewCDPCommand(this.browserViewCDPService, this.groupId, this.store, this.sequence, method, params, sessionId);
+	}
 }
 
 function getWorkspaceRoot(workspaceContextService: IWorkspaceContextService): URI | undefined {
@@ -209,6 +362,183 @@ async function readPreviewEnv(fileService: IFileService, repository: URI): Promi
 	return env;
 }
 
+async function readRsbuildDevServerConfig(fileService: IFileService, repository: URI) {
+	for (const file of PREVIEW_RSBUILD_CONFIG_PATHS) {
+		try {
+			const content = await fileService.readFile(joinPath(repository, file));
+			const parsed = parseWorkbenchAppPreviewRsbuildConfig(content.value.toString());
+			if (parsed) {
+				return parsed;
+			}
+		} catch {
+			// Framework config files are optional.
+		}
+	}
+
+	return undefined;
+}
+
+async function statWorkbenchAppPreviewPathMtime(fileService: IFileService, resource: URI): Promise<number | undefined> {
+	try {
+		return (await fileService.stat(resource)).mtime;
+	} catch {
+		return undefined;
+	}
+}
+
+async function existsWorkbenchAppPreviewPath(fileService: IFileService, resource: URI): Promise<boolean> {
+	try {
+		return await fileService.exists(resource);
+	} catch {
+		return false;
+	}
+}
+
+async function readWorkbenchAppPreviewTextFile(fileService: IFileService, resource: URI): Promise<string | undefined> {
+	try {
+		return (await fileService.readFile(resource)).value.toString();
+	} catch {
+		return undefined;
+	}
+}
+
+async function readWorkbenchAppPreviewFileBase64(fileService: IFileService, resource: URI): Promise<string | undefined> {
+	try {
+		return encodeBase64((await fileService.readFile(resource)).value);
+	} catch {
+		return undefined;
+	}
+}
+
+async function computeWorkbenchAppPreviewLockfileHash(fileService: IFileService, repository: URI): Promise<string | undefined> {
+	const hashInput: string[] = [];
+
+	for (const relativePath of APP_PREVIEW_LOCKFILE_PATHS) {
+		const content = await readWorkbenchAppPreviewFileBase64(fileService, joinPath(repository, relativePath));
+		if (content !== undefined) {
+			hashInput.push(`${relativePath}\n${content}`);
+		}
+	}
+
+	if (!hashInput.length) {
+		return undefined;
+	}
+
+	return `${APP_PREVIEW_LOCKFILE_HASH_VERSION}:${await hashAsync(hashInput.join('\n'))}`;
+}
+
+async function readWorkbenchAppPreviewInstallHashMarker(fileService: IFileService, repository: URI): Promise<string | undefined> {
+	const marker = await readWorkbenchAppPreviewTextFile(fileService, joinPath(repository, 'node_modules', APP_PREVIEW_INSTALL_HASH_MARKER));
+	return marker?.trim() || undefined;
+}
+
+async function writeWorkbenchAppPreviewInstallHashMarker(fileService: IFileService, repository: URI): Promise<void> {
+	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
+	if (!lockfileHash) {
+		return;
+	}
+
+	const nodeModules = joinPath(repository, 'node_modules');
+	if (!await existsWorkbenchAppPreviewPath(fileService, nodeModules)) {
+		return;
+	}
+
+	await fileService.writeFile(joinPath(nodeModules, APP_PREVIEW_INSTALL_HASH_MARKER), VSBuffer.fromString(`${lockfileHash}\n`));
+}
+
+function maxWorkbenchAppPreviewMtime(...values: (number | undefined)[]): number | undefined {
+	const mtimes = values.filter((value): value is number => typeof value === 'number');
+	return mtimes.length ? Math.max(...mtimes) : undefined;
+}
+
+function parseWorkbenchAppPreviewYarnPath(yarnRc: string | undefined): string | undefined {
+	if (!yarnRc) {
+		return undefined;
+	}
+
+	const match = yarnRc.match(/^\s*yarnPath\s*:\s*["']?([^"'\r\n#]+)["']?\s*(?:#.*)?$/m);
+	return match?.[1]?.trim();
+}
+
+async function hasWorkbenchAppPreviewYarnRelease(fileService: IFileService, repository: URI): Promise<boolean> {
+	try {
+		const releases = await fileService.resolve(joinPath(repository, '.yarn', 'releases'));
+		return releases.children?.some(child => child.isFile && child.name.startsWith('yarn-') && child.name.endsWith('.cjs')) === true;
+	} catch {
+		return false;
+	}
+}
+
+async function resolveHeuristicPackageManagerConfig(fileService: IFileService, repository: URI, packageManager: string | undefined, logService?: ILogService) {
+	const yarnRc = await readWorkbenchAppPreviewTextFile(fileService, joinPath(repository, '.yarnrc.yml'));
+	const packageLockMtime = maxWorkbenchAppPreviewMtime(
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'package-lock.json')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'npm-shrinkwrap.json')),
+	);
+	const pnpmWorkspaceMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'pnpm-workspace.yaml'));
+	const pnpmLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'pnpm-lock.yaml'));
+	const yarnLockMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'yarn.lock'));
+	const bunLockMtime = maxWorkbenchAppPreviewMtime(
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'bun.lock')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'bun.lockb')),
+	);
+	const nodeModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules'));
+	const yarnPnpMtime = maxWorkbenchAppPreviewMtime(
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.cjs')),
+		await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.pnp.loader.mjs')),
+	);
+	const yarnNodeModulesStateMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-state.yml'));
+	const yarnIntegrityMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.yarn-integrity'));
+	const yarnInstallStateMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, '.yarn', 'install-state.gz'));
+	const pnpmModulesMtime = await statWorkbenchAppPreviewPathMtime(fileService, joinPath(repository, 'node_modules', '.modules.yaml'));
+	const lockfileMtime = maxWorkbenchAppPreviewMtime(packageLockMtime, pnpmLockMtime, yarnLockMtime, bunLockMtime);
+	const lockfileHash = await computeWorkbenchAppPreviewLockfileHash(fileService, repository);
+	const installedLockfileHash = nodeModulesMtime !== undefined ? await readWorkbenchAppPreviewInstallHashMarker(fileService, repository) : undefined;
+	const detection = detectWorkbenchAppPreviewPackageManager({
+		packageManager,
+		yarnPath: parseWorkbenchAppPreviewYarnPath(yarnRc),
+		hasYarnRelease: await hasWorkbenchAppPreviewYarnRelease(fileService, repository),
+		hasYarnIntegrity: yarnIntegrityMtime !== undefined,
+		hasYarnInstallState: yarnInstallStateMtime !== undefined,
+		hasYarnNodeModulesState: yarnNodeModulesStateMtime !== undefined,
+		hasPnpmModulesYaml: pnpmModulesMtime !== undefined,
+		hasPackageLock: packageLockMtime !== undefined,
+		hasPnpmLock: pnpmLockMtime !== undefined,
+		hasYarnLock: yarnLockMtime !== undefined,
+		hasBunLock: bunLockMtime !== undefined,
+		hasPnpmWorkspace: pnpmWorkspaceMtime !== undefined,
+	});
+	const dependencyArtifactMtime = resolveWorkbenchAppPreviewDependencyArtifactMtime({
+		packageManagerName: detection.name,
+		nodeModulesMtime,
+		yarnNodeModulesStateMtime,
+		yarnIntegrityMtime,
+		yarnInstallStateMtime,
+		yarnPnpMtime,
+		pnpmModulesMtime,
+	});
+	const dependencyReadiness = resolveWorkbenchAppPreviewDependencyReadiness({ dependencyArtifactMtime, lockfileMtime, lockfileHash, installedLockfileHash });
+	if (shouldBackfillWorkbenchAppPreviewInstallHashMarker({ dependencyReadiness, dependencyArtifactMtime, lockfileHash, installedLockfileHash })) {
+		try {
+			await writeWorkbenchAppPreviewInstallHashMarker(fileService, repository);
+		} catch (error) {
+			logService?.warn('[WorkbenchAppPreview] Failed to backfill dependency install hash.', error);
+		}
+	}
+	const scriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, false);
+	const corepackScriptCommandPrefix = resolveWorkbenchAppPreviewPackageManagerScriptCommandPrefix(detection, true);
+	const installCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, false);
+	const corepackInstallCommand = resolveWorkbenchAppPreviewPackageManagerInstallCommand(detection, true);
+
+	return {
+		scriptCommandPrefix,
+		...(corepackScriptCommandPrefix !== scriptCommandPrefix ? { corepackScriptCommandPrefix } : {}),
+		installCommand,
+		...(corepackInstallCommand !== installCommand ? { corepackInstallCommand } : {}),
+		dependencyReadiness,
+	};
+}
+
 function isHttpPreviewTarget(url: string | undefined): boolean {
 	if (!url) {
 		return false;
@@ -222,13 +552,16 @@ function isHttpPreviewTarget(url: string | undefined): boolean {
 	}
 }
 
-async function resolveHeuristicDevConfig(fileService: IFileService, repository: URI, url?: string): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+async function resolveHeuristicDevConfig(fileService: IFileService, repository: URI, url?: string, logService?: ILogService): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
 	const env = await readPreviewEnv(fileService, repository);
 	try {
 		const content = await fileService.readFile(joinPath(repository, 'package.json'));
 		const parsed = JSON.parse(content.value.toString());
 		const scripts = typeof parsed === 'object' && parsed !== null ? (parsed as { scripts?: Record<string, unknown> }).scripts : undefined;
-		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env);
+		const packageManager = typeof parsed === 'object' && parsed !== null ? (parsed as { packageManager?: unknown }).packageManager : undefined;
+		const packageManagerConfig = await resolveHeuristicPackageManagerConfig(fileService, repository, typeof packageManager === 'string' ? packageManager : undefined, logService);
+		const frameworkConfig = await readRsbuildDevServerConfig(fileService, repository);
+		const npmConfig = resolveWorkbenchAppPreviewHeuristicDevConfig(scripts, isHttpPreviewTarget(url) ? url : undefined, env, packageManagerConfig, frameworkConfig);
 		if (npmConfig) {
 			return npmConfig;
 		}
@@ -236,7 +569,11 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		// Continue to static HTML detection when package.json is missing or invalid.
 	}
 
-	for (const dir of ['', 'docs', 'public', 'dist', 'build', 'site', 'out']) {
+	return resolveStaticHtmlDevConfig(fileService, repository);
+}
+
+async function resolveStaticHtmlDevConfig(fileService: IFileService, repository: URI): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+	for (const dir of PREVIEW_STATIC_HTML_INDEX_DIRS) {
 		const htmlPath = dir ? joinPath(repository, dir, 'index.html') : joinPath(repository, 'index.html');
 		try {
 			await fileService.stat(htmlPath);
@@ -246,7 +583,71 @@ async function resolveHeuristicDevConfig(fileService: IFileService, repository: 
 		}
 	}
 
-	return undefined;
+	const htmlFiles: string[] = [];
+	for (const { dir, depth } of PREVIEW_STATIC_HTML_SCAN_DIRS) {
+		await collectStaticHtmlFiles(fileService, repository, dir, depth, htmlFiles);
+		if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+			break;
+		}
+	}
+
+	const selected = selectWorkbenchAppPreviewStaticHtmlFile(htmlFiles);
+	if (!selected) {
+		return undefined;
+	}
+
+	const { serveDir, initialPath } = splitStaticHtmlFile(selected);
+	return resolveWorkbenchAppPreviewStaticHtmlConfig(serveDir, initialPath);
+}
+
+async function collectStaticHtmlFiles(fileService: IFileService, repository: URI, relativeDir: string, depth: number, htmlFiles: string[]): Promise<void> {
+	if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+		return;
+	}
+
+	let stat: IFileStat;
+	try {
+		stat = await fileService.resolve(resolveStaticHtmlResource(repository, relativeDir));
+	} catch {
+		return;
+	}
+
+	const children = [...(stat.children ?? [])].sort((first, second) => first.name.localeCompare(second.name));
+	for (const child of children) {
+		if (htmlFiles.length >= PREVIEW_STATIC_HTML_SCAN_LIMIT) {
+			return;
+		}
+
+		const relativePath = joinStaticHtmlPath(relativeDir, child.name);
+		if (child.isFile && child.name.toLowerCase().endsWith('.html')) {
+			htmlFiles.push(relativePath);
+			continue;
+		}
+
+		if (child.isDirectory && depth > 0) {
+			await collectStaticHtmlFiles(fileService, repository, relativePath, depth - 1, htmlFiles);
+		}
+	}
+}
+
+function resolveStaticHtmlResource(repository: URI, relativePath: string): URI {
+	return relativePath ? joinPath(repository, ...relativePath.split('/')) : repository;
+}
+
+function joinStaticHtmlPath(parent: string, child: string): string {
+	return parent ? `${parent}/${child}` : child;
+}
+
+function splitStaticHtmlFile(relativePath: string): { serveDir: string; initialPath: string } {
+	const lastSlash = relativePath.lastIndexOf('/');
+	if (lastSlash === -1) {
+		return { serveDir: '.', initialPath: relativePath };
+	}
+
+	return {
+		serveDir: relativePath.slice(0, lastSlash) || '.',
+		initialPath: relativePath.slice(lastSlash + 1),
+	};
 }
 
 function parsePreviewOverrides(raw: string | undefined): IAppPreviewOverrides {
@@ -295,6 +696,11 @@ function getBranchRuntimeKey(branchName: string | undefined): string {
 function getBranchRuntime(storageService: IStorageService, repo: URI, branchName: string | undefined): IWorkbenchAppPreviewBranchRuntime {
 	const runtime = parseBranchRuntimeStore(storageService.get(APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY, StorageScope.APPLICATION));
 	return runtime[repo.toString()]?.[getBranchRuntimeKey(branchName)] ?? {};
+}
+
+function getRepoBranchRuntimes(storageService: IStorageService, repo: URI): readonly IWorkbenchAppPreviewBranchRuntime[] {
+	const runtime = parseBranchRuntimeStore(storageService.get(APP_PREVIEW_BRANCH_RUNTIME_STORAGE_KEY, StorageScope.APPLICATION));
+	return Object.values(runtime[repo.toString()] ?? {});
 }
 
 function storeBranchRuntime(storageService: IStorageService, repo: URI, branchName: string | undefined, value: IWorkbenchAppPreviewBranchRuntime): void {
@@ -406,142 +812,6 @@ function templatePreviewUrlPort(value: string): string {
 	return detectPreviewUrlPort(value)?.templatedUrl ?? value.trim();
 }
 
-const APP_PREVIEW_STARTUP_ANIMATION_SRC = 'data:image/svg+xml;base64,' +
-	'PHN2ZyB3aWR0aD0iOTEiIGhlaWdodD0iMTU5IiB2aWV3Qm94PSIwIDAgOTEgMTU5IiBmaWxsPSJub25lIiB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAw' +
-	'MC9zdmciPgo8c3R5bGU+CnN2ZyB7IG92ZXJmbG93OiB2aXNpYmxlOyB9CkBrZXlmcmFtZXMga2ZfRWxsaXBzZV8xX3RyYW5zZm9ybV8wIHsKICAwJSB7CiAg' +
-	'ICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBzY2FsZVgo' +
-	'MCkgc2NhbGVZKDApIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICAxMi44NCUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjog' +
-	'Y3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkgdHJh' +
-	'bnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgwKSBzY2FsZVkoMCkgdHJhbnNsYXRlKC00LjExOHB4LCAtNC4xMThweCk7CiAgfQogIDE2LjQ1JSB7' +
-	'CiAgICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBzY2Fs' +
-	'ZVgoMSkgc2NhbGVZKDEpIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICA3Ni41MiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlv' +
-	'bjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkg' +
-	'dHJhbnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgxKSBzY2FsZVkoMSkgdHJhbnNsYXRlKC00LjExOHB4LCAtNC4xMThweCk7CiAgfQogIDgxLjA5' +
-	'JSB7CiAgICB0cmFuc2Zvcm06IHRyYW5zbGF0ZVgoNTcuNjQ3cHgpIHRyYW5zbGF0ZVkoMTYuNDcxcHgpIHRyYW5zbGF0ZSg0LjExOHB4LCA0LjExOHB4KSBz' +
-	'Y2FsZVgoMCkgc2NhbGVZKDApIHRyYW5zbGF0ZSgtNC4xMThweCwgLTQuMTE4cHgpOwogIH0KICAxMDAlIHsKICAgIHRyYW5zZm9ybTogdHJhbnNsYXRlWCg1' +
-	'Ny42NDdweCkgdHJhbnNsYXRlWSgxNi40NzFweCkgdHJhbnNsYXRlKDQuMTE4cHgsIDQuMTE4cHgpIHNjYWxlWCgwKSBzY2FsZVkoMCkgdHJhbnNsYXRlKC00' +
-	'LjExOHB4LCAtNC4xMThweCk7CiAgfQp9CiNFbGxpcHNlXzEgewogIHRyYW5zZm9ybS1vcmlnaW46IDAgMDsKICBhbmltYXRpb246IGtmX0VsbGlwc2VfMV90' +
-	'cmFuc2Zvcm1fMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGU7Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMV9zdWIwX2JvcmRlci13aWR0aF8wIHsKICAwJSB7' +
-	'CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDdweDsKICB9CiAgODUuMyUgewogICAgYW5pbWF0aW9u' +
-	'LXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA5MS40MyUgewogICAg' +
-	'YW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDkxLjQ5JSB7CiAgICBhbmltYXRpb24tdGlt' +
-	'aW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDBweDsKICB9CiAgOTkuNTklIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246' +
-	'IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDogMHB4OwogIH0KICAxMDAlIHsKICAgIHN0cm9rZS13aWR0aDogMHB4OwogIH0KfQpAa2V5ZnJhbWVzIGtmX1Zl' +
-	'Y3Rvcl8xX3N1YjBfcGF0aC10cmltXzAgewogIDAlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAg' +
-	'dmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAyLjYzNyUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLWRhc2hh' +
-	'cnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDM1LjYwNSUgewogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA0NS40OTYlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgNjEuMTU1JSB7CiAgICBh' +
-	'bmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC43NiwgMCwgMC4yNCwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBz' +
-	'dHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDg3LjQ3MiUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwog' +
-	'ICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAxMDAlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsK' +
-	'ICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAtMTsKICAgIHZpc2liaWxpdHk6IGhpZGRlbjsKICB9Cn0KI1ZlY3Rvcl8xX3N1YjAgewogIGFuaW1hdGlvbjoKICAg' +
-	'IGtmX1ZlY3Rvcl8xX3N1YjBfYm9yZGVyLXdpZHRoXzAgMy4wMzMyNnMgbGluZWFyIGluZmluaXRlLAogICAga2ZfVmVjdG9yXzFfc3ViMF9wYXRoLXRyaW1f' +
-	'MCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGU7Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMV9zdWIxX2JvcmRlci13aWR0aF8wIHsKICAwJSB7CiAgICBhbmlt' +
-	'YXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2Utd2lkdGg6IDdweDsKICB9CiAgODUuMyUgewogICAgYW5pbWF0aW9uLXRpbWluZy1m' +
-	'dW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA5MS40MyUgewogICAgYW5pbWF0aW9u' +
-	'LXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9' +
-	'CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzFfc3ViMV9wYXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRh' +
-	'c2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDQuNDE4JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2Ut' +
-	'ZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IGhpZGRlbjsKICB9CiAgNC42MTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVh' +
-	'cjsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAzNy41' +
-	'ODMlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAg' +
-	'NDcuNDc0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAg' +
-	'fQogIDU2LjYwNiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS1kYXNo' +
-	'YXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgNjEuMTU1JSB7CiAgICBhbmltYXRp' +
-	'b24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC43NiwgMCwgMC4yNCwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwLjk3MDkgMTsKICAgIHN0' +
-	'cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgODkuNDUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246' +
-	'IGN1YmljLWJlemllcigwLjUsIDAsIDAuNSwgMSk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZp' +
-	'c2liaWxpdHk6IGhpZGRlbjsKICB9CiAgMTAwJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2' +
-	'aXNpYmlsaXR5OiBoaWRkZW47CiAgfQp9CiNWZWN0b3JfMV9zdWIxIHsKICBhbmltYXRpb246CiAgICBrZl9WZWN0b3JfMV9zdWIxX2JvcmRlci13aWR0aF8w' +
-	'IDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZSwKICAgIGtmX1ZlY3Rvcl8xX3N1YjFfcGF0aC10cmltXzAgMy4wMzMyNnMgbGluZWFyIGluZmluaXRlOwp9CkBr' +
-	'ZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViMl9ib3JkZXItd2lkdGhfMCB7CiAgMCUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwog' +
-	'ICAgc3Ryb2tlLXdpZHRoOiA3cHg7CiAgfQogIDk1LjQ1JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC41LCAwLCAw' +
-	'LjUsIDEpOwogICAgc3Ryb2tlLXdpZHRoOiA3cHg7CiAgfQogIDk5LjU5JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBz' +
-	'dHJva2Utd2lkdGg6IDBweDsKICB9CiAgMTAwJSB7CiAgICBzdHJva2Utd2lkdGg6IDBweDsKICB9Cn0KQGtleWZyYW1lcyBrZl9WZWN0b3JfMl9zdWIyX3Bh' +
-	'dGgtdHJpbV8wIHsKICAwJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBo' +
-	'aWRkZW47CiAgfQogIDYuNTk0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5' +
-	'OiBoaWRkZW47CiAgfQogIDI2LjMyNiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNTIsIDAsIDAuNzMxLCAwLjU1' +
-	'Myk7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDM5' +
-	'LjU2MSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuMjQ1LCAwLjU0MywgMC41MjcsIDEpOwogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMC42NDEyIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTAuMzU4ODsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDQ5LjQ1MiUg' +
-	'ewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2MS4x' +
-	'NTUlIHsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAg' +
-	'ODEuMDg5JSB7CiAgICBhbmltYXRpb24tdGltaW5nLWZ1bmN0aW9uOiBjdWJpYy1iZXppZXIoMC4wMjYsIDAuMjg5LCAwLjUsIDEpOwogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA5NS4zODMlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KICAxMDAlIHsKICAgIHN0cm9r' +
-	'ZS1kYXNoYXJyYXk6IDAgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzJfc3ViMiB7' +
-	'CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViMl9ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3Jf' +
-	'Ml9zdWIyX3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpAa2V5ZnJhbWVzIGtmX1ZlY3Rvcl8yX3N1YjNfYm9yZGVyLXdpZHRoXzAg' +
-	'ewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA4NC4zOSUgewogICAg' +
-	'YW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogN3B4OwogIH0KICA4OS40' +
-	'NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tl' +
-	'LXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViM19wYXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTog' +
-	'MCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDguNTcyJSB7CiAgICBhbmltYXRpb24tdGltaW5n' +
-	'LWZ1bmN0aW9uOiBsaW5lYXI7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6IGhp' +
-	'ZGRlbjsKICB9CiAgNDEuNTM5JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxpdHk6' +
-	'IHZpc2libGU7CiAgfQogIDUxLjQzJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogMDsKICAgIHZpc2liaWxp' +
-	'dHk6IHZpc2libGU7CiAgfQogIDYxLjE1NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuMTUxLCAtMC4wMTMsIDEs' +
-	'IDAuNDY2KTsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9' +
-	'CiAgODEuMDg5JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47' +
-	'CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVu' +
-	'OwogIH0KfQojVmVjdG9yXzJfc3ViMyB7CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViM19ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIg' +
-	'aW5maW5pdGUsCiAgICBrZl9WZWN0b3JfMl9zdWIzX3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpAa2V5ZnJhbWVzIGtmX1ZlY3Rv' +
-	'cl8yX3N1YjRfYm9yZGVyLXdpZHRoXzAgewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsKICAgIHN0cm9rZS13aWR0aDog' +
-	'N3B4OwogIH0KICA4Ny41NiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwgMC41LCAxKTsKICAgIHN0cm9r' +
-	'ZS13aWR0aDogN3B4OwogIH0KICA4OS40NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLXdpZHRoOiAwcHg7' +
-	'CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzJfc3ViNF9wYXRoLXRyaW1fMCB7CiAgMCUg' +
-	'ewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwLjcx' +
-	'NSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZz' +
-	'ZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDUxLjQzJSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAxIDE7CiAgICBzdHJva2UtZGFzaG9m' +
-	'ZnNldDogMDsKICAgIHZpc2liaWxpdHk6IHZpc2libGU7CiAgfQogIDUzLjQwOCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRh' +
-	'c2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2MS4xNTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1Ymlj' +
-	'LWJlemllcigwLjc2LCAwLCAwLjI0LCAxKTsKICAgIHN0cm9rZS1kYXNoYXJyYXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJp' +
-	'bGl0eTogdmlzaWJsZTsKICB9CiAgOTUuNTc0JSB7CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2' +
-	'aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAg' +
-	'dmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzJfc3ViNCB7CiAgYW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzJfc3ViNF9ib3JkZXItd2lkdGhf' +
-	'MCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3JfMl9zdWI0X3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQpA' +
-	'a2V5ZnJhbWVzIGtmX1ZlY3Rvcl8zX3N1YjVfYm9yZGVyLXdpZHRoXzAgewogIDAlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGxpbmVhcjsK' +
-	'ICAgIHN0cm9rZS13aWR0aDogNnB4OwogIH0KICA4NC4zOSUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogY3ViaWMtYmV6aWVyKDAuNSwgMCwg' +
-	'MC41LCAxKTsKICAgIHN0cm9rZS13aWR0aDogNnB4OwogIH0KICA4Ny45MiUgewogICAgYW5pbWF0aW9uLXRpbWluZy1mdW5jdGlvbjogbGluZWFyOwogICAg' +
-	'c3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLXdpZHRoOiAwcHg7CiAgfQp9CkBrZXlmcmFtZXMga2ZfVmVjdG9yXzNfc3ViNV9w' +
-	'YXRoLXRyaW1fMCB7CiAgMCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTog' +
-	'aGlkZGVuOwogIH0KICAxOS4xNTQlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1YmljLWJlemllcigwLjAxNywgMC45OTYsIDAuNSwgMSk7' +
-	'CiAgICBzdHJva2UtZGFzaGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDI5Ljk2' +
-	'OCUgewogICAgc3Ryb2tlLWRhc2hhcnJheTogMSAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IDA7CiAgICB2aXNpYmlsaXR5OiB2aXNpYmxlOwogIH0KICA2' +
-	'MS4xNTUlIHsKICAgIGFuaW1hdGlvbi10aW1pbmctZnVuY3Rpb246IGN1YmljLWJlemllcigwLjc2LCAwLCAwLjI0LCAxKTsKICAgIHN0cm9rZS1kYXNoYXJy' +
-	'YXk6IDEgMTsKICAgIHN0cm9rZS1kYXNob2Zmc2V0OiAwOwogICAgdmlzaWJpbGl0eTogdmlzaWJsZTsKICB9CiAgOTcuMzYzJSB7CiAgICBzdHJva2UtZGFz' +
-	'aGFycmF5OiAwIDE7CiAgICBzdHJva2UtZGFzaG9mZnNldDogLTE7CiAgICB2aXNpYmlsaXR5OiBoaWRkZW47CiAgfQogIDEwMCUgewogICAgc3Ryb2tlLWRh' +
-	'c2hhcnJheTogMCAxOwogICAgc3Ryb2tlLWRhc2hvZmZzZXQ6IC0xOwogICAgdmlzaWJpbGl0eTogaGlkZGVuOwogIH0KfQojVmVjdG9yXzNfc3ViNSB7CiAg' +
-	'YW5pbWF0aW9uOgogICAga2ZfVmVjdG9yXzNfc3ViNV9ib3JkZXItd2lkdGhfMCAzLjAzMzI2cyBsaW5lYXIgaW5maW5pdGUsCiAgICBrZl9WZWN0b3JfM19z' +
-	'dWI1X3BhdGgtdHJpbV8wIDMuMDMzMjZzIGxpbmVhciBpbmZpbml0ZTsKfQo8L3N0eWxlPgo8ZyBpZD0icGFyYWtpdF9hbmltYXRpb25fd2hpdGUiPgo8Y2ly' +
-	'Y2xlIGlkPSJFbGxpcHNlXzEiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDU3LjY0NzEgMTYuNDcwNikiIGN4PSI0LjExNzY1IiBjeT0iNC4xMTc2NSIgcj0iMy43' +
-	'MDU4OCIgZmlsbD0id2hpdGUiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iMC44MjM1MjkiLz4KPHBhdGggaWQ9IlZlY3Rvcl8xX3N1YjAiIHRyYW5z' +
-	'Zm9ybT0idHJhbnNsYXRlKDE0LjgyMzUgMzguMjY5MykiIGQ9Ik0wIDUxLjQ5NTRDMCA0NC4wODM2IDMuMjk0MTIgLTEuMjEwNSAyNy4xNzY1IDAuMDI0Nzk3' +
-	'NiIgcGF0aExlbmd0aD0iMSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9' +
-	'IjAuOTI0MiAxIi8+CjxwYXRoIGlkPSJWZWN0b3JfMV9zdWIxIiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgtNy42MjkzOWUtMDYgNDEuNTg4MikiIGQ9Ik0wIDcw' +
-	'LjQxMThDMCA1OC4wNTg4IDQ2LjcxNDIgNTEuNzU4MiA1NS4xNzY1IDIwLjE3NjVDNTcuNDkzNCAxMS41Mjk0IDU2LjQxMTggNi41ODgyNCA1MS4wNTg4IDAi' +
-	'IHBhdGhMZW5ndGg9IjEiIHN0cm9rZT0id2hpdGUiIHN0cm9rZS13aWR0aD0iNyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIiBzdHJva2UtZGFzaGFycmF5PSIw' +
-	'LjUxMDQgMSIvPgo8cGF0aCBpZD0iVmVjdG9yXzJfc3ViMiIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNi4xNzY0NyA5OC4yMTA2KSIgZD0iTTYuMTc2NDcgMTYu' +
-	'MjZDNi4xNzY0NyAyNi44ODQ3IDIuMTYwNjMgMzguMDQ0OCAwLjYwNTIxNCA0OS4wOTI4QzAuMDI5MDQxNyA1My4xODUzIDMuODI4MTMgNTUuODkzMyA2LjU4' +
-	'NjE2IDUyLjgxNTRDMTYuOTUzMyA0MS4yNDU4IDIzLjQ0MTggOS45NjM4NyA0MC45NzUzIDAiIHBhdGhMZW5ndGg9IjEiIHZpc2liaWxpdHk9ImhpZGRlbiIg' +
-	'c3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAgMSIvPgo8cGF0aCBpZD0i' +
-	'VmVjdG9yXzJfc3ViMyIgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDcuMTUxOCA5NS4xMTc3KSIgZD0iTTM2Ljg0ODIgNS43NjQ3MUMzNi44NDgyIDUuNzY0NzEg' +
-	'MjkuNDM2NCAwIDExLjczMDUgMEM3LjMxODI1IDAgMy40NDU4MyAxLjEzNDgxIDAgMy4wOTI5OCIgcGF0aExlbmd0aD0iMSIgc3Ryb2tlPSJ3aGl0ZSIgc3Ry' +
-	'b2tlLXdpZHRoPSI3IiBzdHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAuMDMwMyAxIi8+CjxwYXRoIGlkPSJWZWN0b3JfMl9zdWI0' +
-	'IiB0cmFuc2Zvcm09InRyYW5zbGF0ZSgyOS4yMzUzIDUuNzkxZS0wNikiIGQ9Ik0wIDQyLjgyMzVDMi4xOTYwOCA0MS44NjI3IDYuMTc2NDcgMzcuNDcwNiA2' +
-	'LjE3NjQ3IDI3LjU4ODJDNi4xNzY0NyAxNS4yMzUzIDEzLjU4ODIgMCAzMC44ODI0IDBDNDguMTc2NSAwIDUyLjcwNTkgMTUuMjM1MyA1Mi43MDU5IDIxQzUy' +
-	'LjcwNTkgMjIuODU3MiA1My44ODA4IDIyLjQ3MzEgNTMuNTI5NCAyNS4xMTc2QzUzLjExOTYgMjguMjAxOSA1MS40MDYyIDMzLjI2NzIgNDguNDIwOCAzNi43' +
-	'MjZDNDYuOTQzNyAzOC40MzcyIDQ1LjY4ODIgNDAuNTAxNiA0Ni4xNDI3IDQyLjcxNkM0Ni42MzA3IDQ1LjA5MjkgNDcuMzUyOSA0Ny41OTMxIDQ3LjM1Mjkg' +
-	'NTAuNjQ3MUM0Ny4zNTI5IDU2LjIxMzkgNDQuNjY1IDcyLjkxNjQgMjguOTA2NiA4Ny4xMDczQzI4LjA3MDMgODcuODYwNCAyOC4xNTU0IDg5LjI0NjkgMjgu' +
-	'OTc0OCA5MC4wMTg0QzMxLjE3MjIgOTIuMDg3MSAzMy43NjQ3IDk1LjgyMDcgMzMuNzY0NyAxMDAuODgyQzMzLjc2NDcgMTA3LjQ3MSAyNy41ODgyIDEwNy40' +
-	'NzEgMjcuMTc2NSAxMDcuNDcxQzIwLjU4ODIgMTA3LjQ3MSAxNy45MTY1IDk4LjIxMDYgMTcuOTE2NSA5OC4yMTA2IiBwYXRoTGVuZ3RoPSIxIiBzdHJva2U9' +
-	'IndoaXRlIiBzdHJva2Utd2lkdGg9IjciIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWRhc2hhcnJheT0iMC4yNjk1IDEiLz4KPHBhdGggaWQ9IlZl' +
-	'Y3Rvcl8zX3N1YjUiIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcyLjQ3MDYgMjAuODc5MykiIGQ9Ik05LjQ3MDU5IDAuMTIwNzA1QzYuMzEzNzMgLTAuMjkxMDYg' +
-	'MCAwLjEyMDcwNSAwIDUuMDYxODhDMCAxMC4wMDMxIDMuNDMxMzcgMTMuOTgzNSA1LjM1Mjk0IDE1LjM1NkM3LjI1NTI5IDE2LjcxNDggMTIuNTIwNyAwLjg1' +
-	'NDYzNCA5LjU2Mjc1IDAuMTM3NzYiIHBhdGhMZW5ndGg9IjEiIHZpc2liaWxpdHk9ImhpZGRlbiIgc3Ryb2tlPSJ3aGl0ZSIgc3Ryb2tlLXdpZHRoPSI3IiBz' +
-	'dHJva2UtbGluZWNhcD0icm91bmQiIHN0cm9rZS1kYXNoYXJyYXk9IjAgMSIvPgo8L2c+Cjwvc3ZnPgo=';
-
 interface IBranchPreviewSettingsResult {
 	readonly action: 'saveShared' | 'saveLocal' | 'clearLocal';
 	readonly url?: string;
@@ -648,12 +918,12 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 		const dialog = $('.app-preview-settings-modal');
 		dialog.setAttribute('role', 'dialog');
 		dialog.setAttribute('aria-modal', 'true');
-		dialog.setAttribute('aria-label', localize('appPreviewSettingsDialogAria', "Branch Preview Settings"));
+		dialog.setAttribute('aria-label', localize('appPreviewSettingsDialogAria', "Branch Default URL Settings"));
 		block.append(dialog);
 
 		const header = $('.app-preview-settings-header');
 		header.append(
-			$('.app-preview-settings-title', undefined, localize('appPreviewSettingsTitle', "Branch Preview Settings")),
+			$('.app-preview-settings-title', undefined, localize('appPreviewSettingsTitle', "Branch Default URL")),
 			$('.app-preview-settings-branch', undefined, model.branchName)
 		);
 		dialog.append(header);
@@ -672,9 +942,9 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 			primaryAction = 'saveShared';
 			const defaultUrl = model.inheritedSharedUrl ? adaptWorkbenchAppPreviewUrlToPort(model.inheritedSharedUrl, model.assignedPort) ?? model.inheritedSharedUrl : '';
 			const field = createSettingsUrlField(
-				localize('appPreviewSettingsSharedUrlLabel', "Preview URL"),
+				localize('appPreviewSettingsSharedUrlLabel', "Default URL"),
 				defaultUrl,
-				localize('appPreviewSettingsSharedCaption', "Branch default")
+				localize('appPreviewSettingsSharedCaption', "This opens by default for this branch.")
 			);
 			primaryInput = field.input;
 			primaryUrlField = field;
@@ -687,34 +957,34 @@ function showBranchPreviewSettingsModal(model: IBranchPreviewSettingsModel): Pro
 			primaryAction = 'saveLocal';
 			const usesLocalOverride = Boolean(model.localOverrideUrl);
 			const field = createSettingsUrlField(
-				localize('appPreviewSettingsLocalOverrideLabel', "Preview URL"),
+				localize('appPreviewSettingsLocalOverrideLabel', "Default URL"),
 				model.localOverrideUrl ?? adaptWorkbenchAppPreviewUrlToPort(model.sharedBranchUrl, model.assignedPort) ?? model.sharedBranchUrl,
 				usesLocalOverride
 					? localize('appPreviewSettingsLocalCaption', "Local override")
-					: localize('appPreviewSettingsBranchDefaultCaption', "Using branch default")
+					: localize('appPreviewSettingsBranchDefaultCaption', "This opens by default for this branch.")
 			);
 			primaryInput = field.input;
 			primaryUrlField = field;
 			body.append(field.row);
 
 			const sharedSummary = $('.app-preview-settings-shared-summary');
-			const revealShared = createSettingsButton(localize('appPreviewSettingsRevealShared', "Edit branch default"), 'app-preview-settings-link-button');
+			const revealShared = createSettingsButton(localize('appPreviewSettingsRevealShared', "Edit branch default URL"), 'app-preview-settings-link-button');
 			sharedSummary.append(revealShared);
 			body.append(sharedSummary);
 
 			const sharedPanel = $('.app-preview-settings-danger-panel');
 			sharedPanel.hidden = true;
-			const sharedField = createSettingsField(localize('appPreviewSettingsSharedEditLabel', "Branch default"), model.sharedBranchUrl, 'http://127.0.0.1:${PORT}/');
+			const sharedField = createSettingsField(localize('appPreviewSettingsSharedEditLabel', "Branch default URL"), model.sharedBranchUrl, 'http://127.0.0.1:${PORT}/');
 			const sharedPortPreview = createPortDetectionPreview(sharedField.input);
 			const confirmLabel = document.createElement('label');
 			confirmLabel.className = 'app-preview-settings-checkbox';
 			const confirm = document.createElement('input');
 			confirm.type = 'checkbox';
 			confirmLabel.append(confirm, document.createTextNode(localize('appPreviewSettingsSharedConfirm', "Apply for everyone on this branch.")));
-			const saveShared = createSettingsButton(localize('appPreviewSettingsSaveShared', "Save Default"), 'app-preview-settings-danger-button');
+			const saveShared = createSettingsButton(localize('appPreviewSettingsSaveShared', "Save default URL"), 'app-preview-settings-danger-button');
 			saveShared.disabled = true;
 			sharedPanel.append(
-				$('.app-preview-settings-warning', undefined, localize('appPreviewSettingsSharedWarning', "Changes the branch default.")),
+				$('.app-preview-settings-warning', undefined, localize('appPreviewSettingsSharedWarning', "Changes what opens by default for this branch.")),
 				sharedField.row,
 				sharedPortPreview.element,
 				confirmLabel,
@@ -824,6 +1094,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 	private _discoveredUrl: string | undefined;
 	private _discoveredUrlBranchName: string | undefined;
 	private _activeManagedPreviewUrl: string | undefined;
+	private _serverPreviewUrl: string | undefined;
+	private _serverPreviewSource: WorkbenchAppPreviewTargetPreviewSource | undefined;
 	private _workspaceRootKey: string | undefined;
 	private _lastBranchName: string | undefined;
 	private _hasObservedBranchName = false;
@@ -857,6 +1129,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		@ILocalGitService private readonly _localGitService: ILocalGitService,
 		@ILogService private readonly _logService: ILogService,
 		@IPlaywrightService private readonly _playwrightService: IPlaywrightService,
+		@IBrowserViewCDPService private readonly _browserViewCDPService: IBrowserViewCDPService,
+		@IBrowserDesignElementService private readonly _browserDesignElementService: IBrowserDesignElementService,
 		@ILanguageModelToolsService private readonly _toolsService: ILanguageModelToolsService,
 		@ICommandService private readonly _commandService: ICommandService,
 		@IChatSessionsService private readonly _chatSessionsService: IChatSessionsService,
@@ -931,6 +1205,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 	private _serverCwd: string | undefined;
 	private _serverStartInFlight: Promise<IPreviewServerStatus> | undefined;
 	private _serverStartGeneration = 0;
+	private _serverTerminalSentinel: IPreviewTerminalSentinel | undefined;
 	private _needsConfigurationPrompt = false;
 	private _portConflictRecoveryAttempts = 0;
 	private _portConflictRecoveryInFlight = false;
@@ -938,7 +1213,14 @@ export class WorkbenchAppPreviewController extends Disposable {
 	async ensurePreview(reveal: boolean, options?: { skipPreferredNavigation?: boolean }): Promise<BrowserEditorInput | undefined> {
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		if (!root) {
-			return undefined;
+			if (this._workspaceRootKey !== undefined) {
+				this._stopPreviewServer();
+			}
+			this._workspaceRootKey = undefined;
+			this._lastBranchName = undefined;
+			this._hasObservedBranchName = false;
+			this._lastWorkspaceContext = undefined;
+			return this._ensureEmptyRepoPreview(reveal);
 		}
 
 		const rootKey = root.toString();
@@ -999,8 +1281,64 @@ export class WorkbenchAppPreviewController extends Disposable {
 		return preview;
 	}
 
+	private async _ensureEmptyRepoPreview(reveal: boolean): Promise<BrowserEditorInput | undefined> {
+		let repoState: DesignerRepoState | undefined;
+		try {
+			repoState = await this._commandService.executeCommand<DesignerRepoState>(GetDesignerReposStateCommandId);
+		} catch (error) {
+			this._logService.debug('[WorkbenchAppPreview] Empty repo state is unavailable.', error);
+			return undefined;
+		}
+
+		if (!shouldShowDesignerEmptyRepoFtux(repoState)) {
+			return undefined;
+		}
+
+		if (!this._preview || this._preview.isDisposed() || this._preview.id !== APP_PREVIEW_EMPTY_REPO_ID) {
+			this._preview = this._browserViewService.getOrCreateLazy(APP_PREVIEW_EMPTY_REPO_ID, {
+				url: 'about:blank',
+				title: localize('workbenchAppPreviewTitle', "App Preview"),
+				isSessionAppPreview: true,
+			}, { kind: BrowserViewKind.AppPreview });
+
+			this._register(this._preview.onBeforeDispose(e => {
+				if (!this._preview?.isDisposed()) {
+					e.veto();
+				}
+			}));
+		}
+		this._installPreviewActionListener(this._preview);
+
+		const preview = this._preview;
+		const activeGroup = this._editorGroupsService.activeGroup;
+		const shouldOpen = reveal || activeGroup.getIndexOfEditor(preview) !== 0 || !activeGroup.isPinned(preview);
+		if (shouldOpen) {
+			const options: IEditorOptions = { pinned: true, index: 0, preserveFocus: !reveal };
+			await this._editorService.openEditor(preview, options, activeGroup);
+			activeGroup.pinEditor(preview);
+		}
+
+		this._showPreviewStartupPage({
+			phase: 'emptyRepo',
+			title: getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined),
+			message: localize('workbenchAppPreviewEmptyRepoMessage', "Parakit needs a repo before it can show an app preview."),
+			actions: ['pasteRepoUrl', 'openLocalFolder']
+		});
+
+		return preview;
+	}
+
 	private async _maybeStartPreviewServerForCurrentBranch(): Promise<boolean> {
-		if (this._previewStartupInProgress || this._previewAutoStartInFlight || this._serverState === 'starting' || this._serverState === 'running') {
+		// The workspace branch poll calls ensurePreview roughly every 2 seconds, which routes here.
+		// 'failed' must be excluded alongside 'starting'/'running' - otherwise the very next poll
+		// tick after any failure (including a dependency install that is merely slow, see the
+		// installSlow handling in _doStartPreviewServer) treats the preview as idle and silently
+		// restarts it, tearing down a terminal/process that may still be alive and working.
+		if (shouldSkipWorkbenchAppPreviewAutoStart({
+			previewStartupInProgress: this._previewStartupInProgress,
+			previewAutoStartInFlight: this._previewAutoStartInFlight,
+			serverState: this._serverState,
+		})) {
 			return false;
 		}
 
@@ -1010,7 +1348,23 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
-		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			inferredStartupUrl,
+			needsConfigurationPrompt,
+			hasRunnableServerConfig: !!runnableConfig,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
+			this._showPreviewSetupState(root, branchName);
+			return true;
+		}
 		if (configuredUrl && await this._shouldOpenConfiguredPreviewWithoutServer(root, branchName, configuredUrl)) {
 			return false;
 		}
@@ -1072,7 +1426,27 @@ export class WorkbenchAppPreviewController extends Disposable {
 			void this._copyPreviewStartupContext().catch(error => {
 				this._logService.error('[WorkbenchAppPreview] Failed to copy preview startup context.', error);
 			});
+		} else if (action === 'configure') {
+			void this._configurePreviewFromStartupPage().catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to set default URL from startup page.', error);
+			});
+		} else if (action === 'pasteRepoUrl') {
+			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.PasteRepoUrl).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to start add repo URL flow.', error);
+			});
+		} else if (action === 'openLocalFolder') {
+			void this._showAddRepoFromStartupPage(DesignerAddRepoChoice.OpenLocalFolder).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to start open local folder flow.', error);
+			});
 		}
+	}
+
+	private async _configurePreviewFromStartupPage(): Promise<void> {
+		await this._commandService.executeCommand(ConfigureWorkbenchAppPreviewUrlCommandId);
+	}
+
+	private async _showAddRepoFromStartupPage(choice: DesignerAddRepoChoice): Promise<void> {
+		await this._commandService.executeCommand(ShowDesignerAddRepoCommandId, { choice });
 	}
 
 	private async _retryPreviewStartup(): Promise<void> {
@@ -1108,15 +1482,55 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 	}
 
-	async navigateDiscoveredUrl(url: string): Promise<void> {
+	async navigateDiscoveredUrl(url: string, options?: { trustedSource?: boolean }): Promise<void> {
 		const normalizedUrl = normalizeWorkbenchAppPreviewLoopbackUrl(url);
 		this._discoveredUrl = normalizedUrl;
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		this._discoveredUrlBranchName = root ? await this._resolveWorkspaceBranchName(root) : undefined;
+		// Only reconcile tracked server state from a source we know is the managed dev-server
+		// terminal (see the trustedSource: true call site below). Untrusted callers (any other
+		// terminal at the workspace cwd, or agent log scanning) can still navigate opportunistically,
+		// but must not be able to overwrite/persist server state from an unrelated command's output.
+		if (root && options?.trustedSource) {
+			await this._reconcileDiscoveredServerPort(root, normalizedUrl, this._discoveredUrlBranchName);
+		}
 		if (this._previewStartupInProgress) {
 			return;
 		}
 		await this._navigatePreferredUrl();
+	}
+
+	/**
+	 * Dev servers frequently bind to a different port than requested (e.g. "3001 is in use,
+	 * using 3002 instead") without emitting a recognizable port-conflict error. When the
+	 * server's own terminal output reveals it is actually listening somewhere other than
+	 * where we assumed, trust the terminal: update the tracked URL/health URL/port so
+	 * status reporting, health checks, and navigation all target the real server instead
+	 * of silently polling a stale or unrelated process on the originally requested port.
+	 */
+	private async _reconcileDiscoveredServerPort(root: URI, discoveredUrl: string, discoveredBranchName: string | undefined): Promise<void> {
+		const reconciliation = resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: this._serverUrl,
+			serverHealthUrl: this._serverHealthUrl,
+			serverBranch: this._serverBranch,
+			serverFixedPort: this._serverFixedPort,
+			discoveredUrl,
+			discoveredBranchName,
+		});
+		if (!reconciliation) {
+			return;
+		}
+
+		this._logService.info(`[WorkbenchAppPreview] Preview server for ${this._serverBranch ?? '<detached>'} is actually listening on port ${reconciliation.port} (expected ${this._serverPort}); updating tracked URL to ${reconciliation.url}.`);
+		this._serverPort = reconciliation.port;
+		this._serverUrl = reconciliation.url;
+		this._serverHealthUrl = reconciliation.healthUrl;
+		const branchName = await this._resolveWorkspaceBranchName(root);
+		storeBranchRuntime(this._storageService, root, branchName, {
+			...getBranchRuntime(this._storageService, root, branchName),
+			port: reconciliation.port,
+			lastUrl: reconciliation.url,
+		});
 	}
 
 	refreshFromOverride(): void {
@@ -1125,13 +1539,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 		});
 	}
 
-	private async _navigatePreferredUrl(options?: { isNewPreview?: boolean; allowDuringStartup?: boolean; forceNavigate?: boolean; preferRunningServer?: boolean }): Promise<void> {
+	private async _navigatePreferredUrl(options?: { isNewPreview?: boolean; allowDuringStartup?: boolean; forceNavigate?: boolean; preferRunningServer?: boolean }): Promise<string | undefined> {
 		const root = getWorkspaceRoot(this._workspaceContextService);
 		if (!root || !this._preview || this._preview.isDisposed()) {
-			return;
+			return undefined;
 		}
 		if (this._previewStartupInProgress && !options?.allowDuringStartup) {
-			return;
+			return undefined;
 		}
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
@@ -1159,7 +1573,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			if (branchChanged || options?.forceNavigate || options?.preferRunningServer) {
 				this._showPreviewSetupState(root, branchName);
 			}
-			return;
+			return undefined;
 		}
 
 		this._navigatePreviewUrl(url, runtime, {
@@ -1169,6 +1583,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			branchOpenedInSession,
 		});
 		this._previewBranchesOpenedThisSession.add(branchSessionKey);
+		return url;
 	}
 
 	private _shouldForcePreferredNavigation(forceNavigate: boolean, isNewPreview: boolean, branchOpenedInSession: boolean): boolean {
@@ -1264,7 +1679,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 	}
 
-	private async _resolveRunnablePreviewServerConfig(root: URI, branchName: string | undefined, devConfig?: IWorkbenchAppPreviewDevConfig): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
+	private async _resolveRunnablePreviewServerConfig(root: URI, branchName: string | undefined, devConfig?: IWorkbenchAppPreviewDevConfig, inferredStartupUrl?: string): Promise<IResolvedWorkbenchAppPreviewDevConfig | undefined> {
 		const resolvedDevConfig = devConfig ?? await readDevConfig(this._fileService, root);
 		if (resolvedDevConfig) {
 			const resolved = resolveWorkbenchAppPreviewDevConfig(resolvedDevConfig, branchName);
@@ -1274,7 +1689,34 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 
 		const previewConfig = await readPreviewConfig(this._fileService, root);
-		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName));
+		return resolveHeuristicDevConfig(this._fileService, root, getPreviewUrlForBranch(previewConfig, branchName) ?? inferredStartupUrl, this._logService);
+	}
+
+	private _resolveInferredPreviewStartupUrl(root: URI, branchName: string | undefined, port: number | undefined): string | undefined {
+		return resolveWorkbenchAppPreviewInferredStartupUrl({
+			port,
+			branchRuntime: getBranchRuntime(this._storageService, root, branchName),
+			repoRuntimes: getRepoBranchRuntimes(this._storageService, root),
+		});
+	}
+
+	private _storeSuccessfulPreviewUrl(root: URI, branchName: string | undefined, url: string | undefined): void {
+		if (!url) {
+			return;
+		}
+
+		const normalized = normalizeHttpUrl(url);
+		if (!normalized) {
+			return;
+		}
+
+		storeBranchRuntime(this._storageService, root, branchName, {
+			...getBranchRuntime(this._storageService, root, branchName),
+			port: this._serverPort,
+			lastUrl: normalized,
+			lastSuccessfulUrl: normalized,
+			lastSuccessfulAt: Date.now()
+		});
 	}
 
 	private _showPreviewSetupState(root: URI, branchName: string | undefined): void {
@@ -1282,10 +1724,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 			return;
 		}
 
+		this._previewStartupInProgress = false;
 		this._needsConfigurationPrompt = true;
-		this._serverMessage = `No preview URL is configured for ${branchName ?? 'the current branch'}. Configure a branch preview URL or start the app from Claude Code.`;
+		this._serverMessage = `No default URL is set for ${branchName ?? 'the current branch'}. Set the URL that opens by default for this branch.`;
 		this._showPreviewStartupPage(this._createPreviewStartupPageState('setup', root, branchName, this._lastWorkspaceContext, {
-			message: localize('appPreviewSetupMessage', "No preview URL is configured for this branch. Configure a branch preview URL or restart the preview server."),
+			message: localize('appPreviewSetupMessage', "Set the URL that opens by default for this branch."),
 			url: this._serverUrl,
 			healthUrl: this._serverHealthUrl,
 			command: this._serverCommand,
@@ -1379,6 +1822,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (instance === this._serverTerminal) {
 			this._serverRecentOutput = `${this._serverRecentOutput}${data}`.slice(-PREVIEW_SERVER_OUTPUT_LIMIT);
 			this._serverLastOutputAt = Date.now();
+			this._resolveServerTerminalSentinelFromOutput();
 			const url = this._extractServerAdvertisedUrl(this._serverRecentOutput);
 			if (url) {
 				await this._adoptServerAdvertisedUrl(url);
@@ -1404,6 +1848,352 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (url) {
 			await this.ensurePreview(false);
 			await this.navigateDiscoveredUrl(url);
+		}
+	}
+
+	private _resolveServerTerminalSentinelFromOutput(): void {
+		const sentinel = this._serverTerminalSentinel;
+		if (!sentinel) {
+			return;
+		}
+
+		const match = this._serverRecentOutput.match(new RegExp(`${sentinel.value}:(\\d+)`));
+		if (!match) {
+			return;
+		}
+
+		this._serverTerminalSentinel = undefined;
+		sentinel.resolve({
+			exitCode: Number(match[1]),
+			output: this._serverRecentOutput,
+		});
+	}
+
+	private async _waitForCommandDetectionCapability(terminal: ITerminalInstance, timeoutMs: number): Promise<ICommandDetectionCapability | undefined> {
+		const existing = terminal.capabilities.get(TerminalCapability.CommandDetection);
+		if (existing) {
+			return existing;
+		}
+
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const timeout = mainWindow.setTimeout(() => {
+				store.dispose();
+				resolve(undefined);
+			}, timeoutMs);
+			store.add(terminal.capabilities.onDidAddCommandDetectionCapability(capability => {
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve(capability);
+			}));
+		});
+	}
+
+	private async _runPreviewTerminalCommandWithDetection(terminal: ITerminalInstance, command: string, timeoutMs: number): Promise<IPreviewTerminalCommandResult | undefined> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		if (!commandDetection) {
+			return undefined;
+		}
+
+		const commandId = `app-preview-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const timeout = mainWindow.setTimeout(() => {
+				store.dispose();
+				resolve({ output: this._serverRecentOutput, timedOut: true });
+			}, timeoutMs);
+			const finish = (terminalCommand: ITerminalCommand) => {
+				if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+					return;
+				}
+
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve({
+					exitCode: terminalCommand.exitCode,
+					output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+				});
+			};
+			store.add(commandDetection.onCommandFinished(finish));
+			store.add(commandDetection.onCommandInvalidated(commands => {
+				for (const terminalCommand of commands) {
+					finish(terminalCommand);
+				}
+			}));
+			void terminal.runCommand(command, true, commandId, true).catch(error => {
+				mainWindow.clearTimeout(timeout);
+				store.dispose();
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private _matchesPreviewTerminalCommand(terminalCommand: ITerminalCommand, commandId: string, command: string): boolean {
+		if (terminalCommand.id === commandId || terminalCommand.command === command) {
+			return true;
+		}
+
+		try {
+			return terminalCommand.extractCommandLine() === command;
+		} catch {
+			return false;
+		}
+	}
+
+	private async _runPreviewTerminalCommandWithSentinel(terminal: ITerminalInstance, command: string, timeoutMs: number): Promise<IPreviewTerminalCommandResult> {
+		const sentinel = `__APP_PREVIEW_COMMAND_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+		const sentinelCommand = `${command}; echo ${sentinel}:$?`;
+		return new Promise(resolve => {
+			const timeout = mainWindow.setTimeout(() => {
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: this._serverRecentOutput, timedOut: true });
+			}, timeoutMs);
+			this._serverTerminalSentinel = {
+				value: sentinel,
+				resolve: result => {
+					mainWindow.clearTimeout(timeout);
+					resolve(result);
+				}
+			};
+			void terminal.sendText(sentinelCommand, true, true).catch(error => {
+				mainWindow.clearTimeout(timeout);
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private async _runPreviewTerminalCommand(terminal: ITerminalInstance, command: string, timeoutMs: number, useSentinelFallback: boolean): Promise<IPreviewTerminalCommandResult> {
+		const detectionResult = await this._runPreviewTerminalCommandWithDetection(terminal, command, timeoutMs);
+		if (detectionResult) {
+			return detectionResult;
+		}
+
+		if (!useSentinelFallback) {
+			return { output: this._serverRecentOutput, timedOut: true };
+		}
+
+		return this._runPreviewTerminalCommandWithSentinel(terminal, command, timeoutMs);
+	}
+
+	/**
+	 * Runs the dependency-install command and waits for it to actually finish, however long that
+	 * takes - unlike _runPreviewTerminalCommand, this never gives up on the wait. If it is still
+	 * running after `timeoutMs`, `onSlow` fires exactly once so the caller can tell the user
+	 * installation is taking a long time, but the underlying process is never touched and the wait
+	 * for its real result continues in the background. This is what stops a merely slow install
+	 * from ever being treated the same as a dead one (see PREVIEW_DEPENDENCY_INSTALL_TIMEOUT).
+	 */
+	private async _runPreviewDependencyInstallCommand(
+		terminal: ITerminalInstance,
+		command: string,
+		timeoutMs: number,
+		isCurrentStart: () => boolean,
+		onSlow: () => void,
+	): Promise<IPreviewTerminalCommandResult> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		const completion = commandDetection
+			? this._awaitPreviewInstallCommandDetection(terminal, command, commandDetection)
+			: this._awaitPreviewInstallCommandSentinel(terminal, command);
+
+		const initialWait = timeout(timeoutMs);
+		const finishedWithinBudget = await Promise.race([
+			completion.then(() => true, () => true),
+			initialWait.then(() => false, () => false),
+		]);
+		initialWait.cancel();
+		if (finishedWithinBudget) {
+			return completion;
+		}
+
+		onSlow();
+		return this._waitForPreviewSlowInstallOutcome(completion, isCurrentStart);
+	}
+
+	/**
+	 * Keeps waiting for an install's real result after it has already been reported as slow -
+	 * stopping only when it truly finishes, the terminal actually exits, or a newer start
+	 * supersedes this one (e.g. the user chose to restart instead of waiting).
+	 */
+	private async _waitForPreviewSlowInstallOutcome(completion: Promise<IPreviewTerminalCommandResult>, isCurrentStart: () => boolean): Promise<IPreviewTerminalCommandResult> {
+		while (true) {
+			const watchdog = timeout(PREVIEW_DEPENDENCY_INSTALL_WATCHDOG_INTERVAL);
+			const finished = await Promise.race([
+				completion.then(() => true, () => true),
+				watchdog.then(() => false, () => false),
+			]);
+			watchdog.cancel();
+			if (finished) {
+				return completion;
+			}
+			if (!isCurrentStart() || this._serverTerminalExited) {
+				return { output: this._serverRecentOutput, timedOut: true };
+			}
+		}
+	}
+
+	private _awaitPreviewInstallCommandDetection(terminal: ITerminalInstance, command: string, commandDetection: ICommandDetectionCapability): Promise<IPreviewTerminalCommandResult> {
+		const commandId = `app-preview-install-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		return new Promise(resolve => {
+			const store = new DisposableStore();
+			const finish = (terminalCommand: ITerminalCommand) => {
+				if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+					return;
+				}
+
+				store.dispose();
+				resolve({
+					exitCode: terminalCommand.exitCode,
+					output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+				});
+			};
+			store.add(commandDetection.onCommandFinished(finish));
+			store.add(commandDetection.onCommandInvalidated(commands => {
+				for (const terminalCommand of commands) {
+					finish(terminalCommand);
+				}
+			}));
+			void terminal.runCommand(command, true, commandId, true).catch(error => {
+				store.dispose();
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private _awaitPreviewInstallCommandSentinel(terminal: ITerminalInstance, command: string): Promise<IPreviewTerminalCommandResult> {
+		const sentinel = `__APP_PREVIEW_COMMAND_${Date.now()}_${Math.random().toString(36).slice(2)}__`;
+		const sentinelCommand = `${command}; echo ${sentinel}:$?`;
+		return new Promise(resolve => {
+			this._serverTerminalSentinel = { value: sentinel, resolve };
+			void terminal.sendText(sentinelCommand, true, true).catch(error => {
+				if (this._serverTerminalSentinel?.value === sentinel) {
+					this._serverTerminalSentinel = undefined;
+				}
+				resolve({ output: error instanceof Error ? error.message : String(error), exitCode: 1 });
+			});
+		});
+	}
+
+	private async _waitForPreviewServerTerminalReady(terminal: ITerminalInstance): Promise<boolean> {
+		for (let attempt = 0; attempt < PREVIEW_TERMINAL_READY_ATTEMPTS; attempt++) {
+			const result = await this._runPreviewTerminalCommandWithSentinel(terminal, ':', PREVIEW_TERMINAL_READY_TIMEOUT);
+			if (!result.timedOut && result.exitCode === 0) {
+				this._serverRecentOutput = '';
+				this._serverLastOutputAt = undefined;
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	private async _runPreviewServerTerminalCommand(terminal: ITerminalInstance, command: string, root: URI, branchName: string | undefined, context: IDesignerWorkspaceContext | undefined): Promise<void> {
+		const commandDetection = await this._waitForCommandDetectionCapability(terminal, PREVIEW_COMMAND_DETECTION_WAIT_TIMEOUT);
+		if (!commandDetection) {
+			const result = await this._runPreviewTerminalCommandWithSentinel(terminal, command, PREVIEW_TERMINAL_READY_TIMEOUT);
+			if (result.timedOut) {
+				return;
+			}
+
+			await this._handlePreviewServerCommandExit(terminal, result, root, branchName, context);
+			return;
+		}
+
+		const commandId = `app-preview-server-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+		const store = new DisposableStore();
+		let finished = false;
+		const finish = (result: IPreviewTerminalCommandResult) => {
+			if (finished) {
+				return;
+			}
+
+			finished = true;
+			store.dispose();
+			void this._handlePreviewServerCommandExit(terminal, result, root, branchName, context).catch(error => {
+				this._logService.error('[WorkbenchAppPreview] Failed to handle preview server command exit.', error);
+			});
+		};
+		const finishCommand = (terminalCommand: ITerminalCommand) => {
+			if (!this._matchesPreviewTerminalCommand(terminalCommand, commandId, command)) {
+				return;
+			}
+
+			finish({
+				exitCode: terminalCommand.exitCode,
+				output: terminalCommand.getOutput() ?? this._serverRecentOutput,
+			});
+		};
+
+		store.add(commandDetection.onCommandFinished(finishCommand));
+		store.add(commandDetection.onCommandInvalidated(commands => {
+			for (const terminalCommand of commands) {
+				finishCommand(terminalCommand);
+			}
+		}));
+		this._serverTerminalExitStore.add(store);
+		void terminal.runCommand(command, true, commandId, true).catch(error => {
+			finish({
+				exitCode: 1,
+				output: error instanceof Error ? error.message : String(error),
+			});
+		});
+	}
+
+	private async _handlePreviewServerCommandExit(terminal: ITerminalInstance, result: IPreviewTerminalCommandResult, root: URI, branchName: string | undefined, context: IDesignerWorkspaceContext | undefined): Promise<void> {
+		if (terminal !== this._serverTerminal || this._serverTerminalExited) {
+			return;
+		}
+
+		const nextState = getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: this._serverState,
+			serverHealth: this._serverHealth,
+		});
+		if (!nextState) {
+			return;
+		}
+
+		this._serverState = nextState;
+		this._serverHealth = 'unhealthy';
+		this._serverMessage = this._formatPreviewTerminalFailureMessage(
+			result.output ?? this._serverRecentOutput,
+			nextState === 'failed'
+				? localize('appPreviewServerCommandExitedBeforeReadyMessage', "Preview server command exited before the app became available.")
+				: localize('appPreviewServerCommandStoppedMessage', "Preview server command exited.")
+		);
+
+		if (nextState === 'failed') {
+			this._previewStartupInProgress = false;
+			this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+				message: this._serverMessage,
+				url: this._serverUrl,
+				healthUrl: this._serverHealthUrl,
+				command: this._serverCommand,
+				cwd: this._serverCwd
+			}));
+		}
+	}
+
+	private async _isCorepackAvailable(terminal: ITerminalInstance): Promise<boolean> {
+		const result = await this._runPreviewTerminalCommand(terminal, 'corepack --version', PREVIEW_COREPACK_PROBE_TIMEOUT, false);
+		return result.exitCode === 0;
+	}
+
+	private _formatPreviewTerminalFailureMessage(output: string, fallback: string): string {
+		switch (classifyWorkbenchAppPreviewTerminalFailure(output, this._serverPort)) {
+			case 'portConflict':
+				return localize('appPreviewTerminalFailurePortConflict', "The preview server could not start because the selected port is already in use.");
+			case 'missingBinary':
+				return localize('appPreviewTerminalFailureMissingBinary', "A required command was not found on this machine.");
+			case 'moduleNotFound':
+				return localize('appPreviewTerminalFailureModuleNotFound', "A required Node dependency is missing.");
+			case 'permissionDenied':
+				return localize('appPreviewTerminalFailurePermissionDenied', "The preview command was blocked by a permissions error.");
+			default:
+				return fallback;
 		}
 	}
 
@@ -1452,7 +2242,12 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		this._serverUrl = normalizedUrl;
 		this._serverHealthUrl = healthUrl;
-		this._discoveredUrl = normalizedUrl;
+		const navigationUrl = resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: normalizedUrl,
+			previewUrl: this._serverPreviewUrl,
+			previewSource: this._serverPreviewSource,
+		});
+		this._discoveredUrl = navigationUrl;
 		this._discoveredUrlBranchName = branchName;
 		storeBranchRuntime(this._storageService, root, branchName, {
 			...getBranchRuntime(this._storageService, root, branchName),
@@ -1471,7 +2266,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 				return;
 			}
 
-			await this.navigateDiscoveredUrl(normalizedUrl);
+			await this.navigateDiscoveredUrl(navigationUrl, { trustedSource: true });
 		}
 
 	private _resolveHealthUrl(url: string, healthPath: string | undefined): string {
@@ -1568,11 +2363,48 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	async runPreviewServer(): Promise<IPreviewServerStatus> {
-		return this._startPreviewServer(false, await this._getCurrentBranchPort());
+		if (await this._showPreviewSetupInsteadOfStarting()) {
+			return this.getPreviewStatus();
+		}
+		return this._startPreviewServer(false, await this._getCurrentBranchPort(), false, true);
 	}
 
 	async restartPreviewServer(): Promise<IPreviewServerStatus> {
-		return this._startPreviewServer(true, await this._getCurrentBranchPort());
+		if (await this._showPreviewSetupInsteadOfStarting()) {
+			return this.getPreviewStatus();
+		}
+		return this._startPreviewServer(true, await this._getCurrentBranchPort(), false, true);
+	}
+
+	/**
+	 * Mirrors the setup-before-start gate already applied to the automatic startup paths
+	 * (initial auto-start and branch-switch reconciliation), so explicitly triggered
+	 * Run/Restart Preview Server commands and their LM tool equivalents also show the
+	 * "this branch needs configuration" screen instead of attempting a doomed normal start.
+	 */
+	private async _showPreviewSetupInsteadOfStarting(): Promise<boolean> {
+		const root = getWorkspaceRoot(this._workspaceContextService);
+		if (!root) {
+			return false;
+		}
+		const branchName = await this._resolveWorkspaceBranchName(root);
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			inferredStartupUrl,
+			needsConfigurationPrompt,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
+			this._showPreviewSetupState(root, branchName);
+			return true;
+		}
+		return false;
 	}
 
 	preflightDesignerWorkspaceContext(): IDesignerWorkspaceContextPreflight {
@@ -1612,7 +2444,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}));
 
 		const branchName = await this._resolveWorkspaceBranchName(root);
-		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, getBranchRuntime(this._storageService, root, branchName));
+		const runtime = getBranchRuntime(this._storageService, root, branchName);
+		const configuredUrl = await this._resolveConfiguredPreviewUrl(root, branchName, runtime);
 		if (configuredUrl && await this._shouldOpenConfiguredPreviewWithoutServer(root, branchName, configuredUrl)) {
 			this._showPreviewStartupPage(this._createPreviewStartupPageState('opening', root, context.branchName, context, {
 				message: localize('appPreviewOpeningConfiguredMessage', "Opening the configured preview for this repository."),
@@ -1621,6 +2454,22 @@ export class WorkbenchAppPreviewController extends Disposable {
 			this._previewStartupInProgress = false;
 			const branchOpenedInSession = this._previewBranchesOpenedThisSession.has(this._getBranchSessionKey(root, branchName));
 			await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: !branchOpenedInSession });
+			await this._reconcileClaudeWorkspaceContext(context);
+			return this.getCommandStatus();
+		}
+		const needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
+		const inferredStartupUrl = !configuredUrl && needsConfigurationPrompt
+			? this._resolveInferredPreviewStartupUrl(root, branchName, runtime.port ?? await this._getOrAssignBranchPort(root, branchName))
+			: undefined;
+		const runnableConfig = !configuredUrl && needsConfigurationPrompt ? await this._resolveRunnablePreviewServerConfig(root, branchName, undefined, inferredStartupUrl) : undefined;
+		if (shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl,
+			inferredStartupUrl,
+			needsConfigurationPrompt,
+			hasRunnableServerConfig: !!runnableConfig,
+			canStartServerWithoutInstall: canStartWorkbenchAppPreviewServerWithoutInstall(runnableConfig),
+		})) {
+			this._showPreviewSetupState(root, branchName);
 			await this._reconcileClaudeWorkspaceContext(context);
 			return this.getCommandStatus();
 		}
@@ -1671,13 +2520,13 @@ export class WorkbenchAppPreviewController extends Disposable {
 		}
 		const normalized = normalizeHttpUrl((url ?? this._serverUrl ?? '').trim());
 		if (!normalized) {
-			throw new Error('No valid preview URL is available to promote.');
+			throw new Error('No valid URL is available to save as the branch default.');
 		}
 		const branchName = await this._resolveWorkspaceBranchName(root);
 		await writeProjectPreviewUrl(this._fileService, root, branchName, normalized);
 		this._needsConfigurationPrompt = false;
 		await this._navigatePreferredUrl();
-		this._serverMessage = `Saved ${normalized} as the project preview URL${branchName ? ` for ${branchName}` : ''}.`;
+		this._serverMessage = `Saved ${normalized} as the default URL${branchName ? ` for ${branchName}` : ''}.`;
 		return this.getPreviewStatus();
 	}
 
@@ -1690,7 +2539,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 	async navigateAppPreview(url: string | undefined): Promise<IAppPreviewCommandStatus> {
 		const normalized = normalizeHttpUrl((url ?? '').trim());
 		if (!normalized) {
-			throw new Error('No valid App Preview URL was provided.');
+			throw new Error('No valid default URL was provided.');
 		}
 
 		const root = getWorkspaceRoot(this._workspaceContextService);
@@ -1848,6 +2697,86 @@ export class WorkbenchAppPreviewController extends Disposable {
 		};
 	}
 
+	async inspectAppPreviewElement(args?: IAppPreviewInspectElementCommandArgs): Promise<IAppPreviewInspectElementResult> {
+		const preview = await this._requireTrackedPreview();
+		const selector = args?.ref ? `aria-ref=${args.ref}` : args?.selector;
+		if (!selector) {
+			throw new Error('Either a "ref" or "selector" parameter is required.');
+		}
+
+		const states = Array.isArray(args?.states) ? args.states.filter((state): state is string => typeof state === 'string') : undefined;
+		const markerAttribute = 'data-parakit-inspect-marker';
+		const markerId = generateUuid();
+		const groupStore = new DisposableStore();
+		let groupId: string | undefined;
+		let sessionId: string | undefined;
+
+		try {
+			await playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page, sel, attr, id) => page.locator(sel).evaluate((element, marker) => {
+				const [attrName, attrValue] = marker as [string, string];
+				element.setAttribute(attrName, attrValue);
+			}, [attr, id]), selector, markerAttribute, markerId);
+
+			groupId = await this._browserViewCDPService.createSessionGroup(preview.id);
+			const sequence: ICDPRequestSequence = { value: 1 };
+			const { targetInfos } = await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.getTargets') as { targetInfos?: CDPTargetInfo[] };
+			const targets = targetInfos ?? [];
+			const target = targets.find(target => target.type === 'page') ?? targets[0];
+			if (!target) {
+				throw new Error('Could not resolve a CDP target for this App Preview tab.');
+			}
+
+			const attachResult = await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.attachToTarget', {
+				targetId: target.targetId,
+				flatten: true
+			}) as { sessionId?: string };
+			if (!attachResult.sessionId) {
+				throw new Error('Could not attach a CDP session to the App Preview tab.');
+			}
+			sessionId = attachResult.sessionId;
+
+			const connection = groupStore.add(new AppPreviewCDPConnection(this._browserViewCDPService, groupId, groupStore, sequence, sessionId, target.targetId));
+			await connection.sendCommand('DOM.enable');
+			await connection.sendCommand('CSS.enable');
+			await connection.sendCommand('Runtime.enable');
+
+			const { root } = await connection.sendCommand('DOM.getDocument') as { root?: { nodeId?: number } };
+			if (typeof root?.nodeId !== 'number') {
+				throw new Error('Could not read the App Preview DOM root.');
+			}
+
+			const { nodeId } = await connection.sendCommand('DOM.querySelector', {
+				nodeId: root.nodeId,
+				selector: `[${markerAttribute}="${markerId}"]`,
+			}) as { nodeId?: number };
+			if (!nodeId) {
+				throw new Error(`Could not locate an element matching "${selector}" for inspection.`);
+			}
+
+			const elementData = await extractNodeData(connection, { nodeId }, { states });
+			const { propertyGroups } = await this._browserDesignElementService.inspectElement(elementData);
+			return { ...elementData, propertyGroups };
+		} finally {
+			await playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page, sel, attr) => page.locator(sel).evaluate((element, attrName) => {
+				element.removeAttribute(attrName);
+			}, attr), selector, markerAttribute).catch(() => {
+				// Best effort cleanup.
+			});
+			if (groupId && sessionId) {
+				const sequence: ICDPRequestSequence = { value: 1_000_000 };
+				await sendAppPreviewCDPCommand(this._browserViewCDPService, groupId, groupStore, sequence, 'Target.detachFromTarget', { sessionId }).catch(() => {
+					// Best effort cleanup.
+				});
+			}
+			if (groupId) {
+				await this._browserViewCDPService.destroySessionGroup(groupId).catch(() => {
+					// Best effort cleanup.
+				});
+			}
+			groupStore.dispose();
+		}
+	}
+
 	async typeInAppPreview(args?: IAppPreviewTypeCommandArgs): Promise<{ pageId: string; summary: string }> {
 		const preview = await this._requireTrackedPreview();
 		let selector = args?.selector;
@@ -1904,6 +2833,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 		this._register(CommandsRegistry.registerCommand(ReadWorkbenchAppPreviewCommandId, () => this.readAppPreview()));
 		this._register(CommandsRegistry.registerCommand(ScreenshotWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewScreenshotCommandArgs) => this.screenshotAppPreview(args)));
 		this._register(CommandsRegistry.registerCommand(ClickWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewClickCommandArgs) => this.clickAppPreview(args)));
+		this._register(CommandsRegistry.registerCommand(InspectElementWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewInspectElementCommandArgs) => this.inspectAppPreviewElement(args)));
 		this._register(CommandsRegistry.registerCommand(TypeWorkbenchAppPreviewCommandId, (_accessor, args?: IAppPreviewTypeCommandArgs) => this.typeInAppPreview(args)));
 		this._register(CommandsRegistry.registerCommand(PreflightDesignerWorkspaceContextCommandId, () => this.preflightDesignerWorkspaceContext()));
 		this._register(CommandsRegistry.registerCommand(DesignerWorkspaceContextChangedCommandId, (_accessor, context?: IDesignerWorkspaceContext) => this.reconcileDesignerWorkspaceContext(context)));
@@ -2021,34 +2951,75 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 		const fixedPort = getWorkbenchAppPreviewDevConfigFixedPort(resolvedConfig);
 		const port = fixedPort ?? (requestedPort && await this._isPortAvailable(requestedPort) ? requestedPort : await this._findAvailablePort());
-		const resolvedServer = applyWorkbenchAppPreviewDevPort(resolvedConfig, port);
+
+		// A repo-fixed port is non-negotiable: the built HTML pins its asset URLs to it, so the dev
+		// server cannot be allowed to silently fall back to another port. Guarantee the port is ours
+		// before launching - auto-closing any foreign process squatting on it (e.g. an orphaned dev
+		// server from a different repo) - so opening or switching always lands on the real app
+		// instead of a stale/foreign one that happens to answer on the same port.
+		if (fixedPort !== undefined) {
+			const fixedPortReady = await this._ensureRequiredPortAvailable(fixedPort, root);
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (!fixedPortReady.ok) {
+				this._serverState = 'failed';
+				this._serverHealth = 'unhealthy';
+				this._serverMessage = fixedPortReady.message;
+				this._previewStartupInProgress = false;
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+					message: fixedPortReady.message,
+				}));
+				return this.getPreviewStatus();
+			}
+		}
+
 		const cwd = resolvedConfig.cwd ? joinPath(root, resolvedConfig.cwd).fsPath : root.fsPath;
-		this._serverUrl = resolvedServer.url;
-		this._serverHealthUrl = resolvedServer.healthUrl;
-		this._serverHealthPath = resolvedConfig.healthPath;
+		const resolvedTarget = resolveWorkbenchAppPreviewDevServerTarget(resolvedConfig, port, cwd);
+		const resolvedServer = {
+			command: resolvedTarget.process.command,
+			env: resolvedTarget.process.env,
+			url: resolvedTarget.server.url,
+			healthUrl: resolvedTarget.health.url,
+		};
+		const replacePort = (value: string) => value.replace(/\$\{PORT\}/g, String(resolvedTarget.port.value));
+		let serverCommand = resolvedTarget.process.command;
+		let installCommand = resolvedConfig.installCommand ? replacePort(resolvedConfig.installCommand) : undefined;
+		this._serverUrl = resolvedTarget.server.url;
+		this._serverHealthUrl = resolvedTarget.health.url;
+		this._serverHealthPath = resolvedConfig.healthUrl ? resolvedTarget.health.url : resolvedConfig.healthPath;
+		this._serverPreviewUrl = resolvedTarget.preview.url;
+		this._serverPreviewSource = resolvedTarget.preview.source;
 		this._serverBranch = branchName;
-		this._serverCommand = resolvedServer.command;
-		this._serverPort = port;
+		this._serverCommand = serverCommand;
+		this._serverPort = resolvedTarget.port.value;
 		this._serverFixedPort = fixedPort;
 		this._serverCwd = cwd;
 		storeBranchRuntime(this._storageService, root, branchName, {
 			...getBranchRuntime(this._storageService, root, branchName),
-			port,
-			lastUrl: resolvedServer.url
+			port: resolvedTarget.port.value,
+			lastUrl: resolvedTarget.server.url
 		});
+		if (resolvedTarget.preview.source !== 'server') {
+			this._discoveredUrl = resolvedTarget.preview.url;
+			this._discoveredUrlBranchName = branchName;
+		}
 
 		await this.ensurePreview(false);
 		if (waitForHealthy) {
-			this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, context, {
-				message: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
+			this._showPreviewStartupPage(this._createPreviewStartupPageState(installCommand ? 'installingDependencies' : 'serverStarting', root, branchName, context, {
+				message: installCommand
+					? localize('appPreviewInstallPreparingMessage', "Checking and installing dependencies before starting the preview. A fresh install can take a few minutes.")
+					: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
 				url: resolvedServer.url,
 				healthUrl: resolvedServer.healthUrl,
-				command: resolvedServer.command,
+				command: installCommand ?? serverCommand,
 				cwd
 			}));
-		} else {
-			await this.navigateDiscoveredUrl(resolvedServer.url);
 		}
+		// Do not navigate to resolvedServer.url here: _stopPreviewServer() above always tears down
+		// any existing terminal, so nothing is listening at this URL yet. Navigation happens once the
+		// server is actually confirmed (health check below, or the server's own terminal output).
 		this._needsConfigurationPrompt = await this._shouldPromptToPromotePreviewUrl(root, branchName);
 
 		try {
@@ -2071,23 +3042,124 @@ export class WorkbenchAppPreviewController extends Disposable {
 			this._serverTerminalExitStore.add(terminal.onExit(() => {
 				this._serverTerminalExited = true;
 			}));
-			await this._serverTerminal.sendText(resolvedServer.command, true, true);
+			const terminalReady = await this._waitForPreviewServerTerminalReady(terminal);
 			if (!isCurrentStart()) {
 				return this.getPreviewStatus();
 			}
-			this._serverState = 'running';
-			this._serverMessage = this._needsConfigurationPrompt
-				? `Opened ${resolvedServer.url}. Ask the user whether to save this as the branch preview URL.`
-				: `Opened ${resolvedServer.url}.`;
+			if (!terminalReady) {
+				this._serverState = 'failed';
+				this._serverHealth = 'unknown';
+				this._serverMessage = this._formatPreviewTerminalFailureMessage(this._serverRecentOutput, localize('appPreviewTerminalNotReadyMessage', "Preview terminal did not become ready before the server could start."));
+				this._previewStartupInProgress = false;
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+					message: this._serverMessage,
+					url: resolvedServer.url,
+					healthUrl: resolvedServer.healthUrl,
+					command: serverCommand,
+					cwd
+				}));
+				return this.getPreviewStatus();
+			}
+			const corepackAvailable = resolvedConfig.corepackCommand || resolvedConfig.corepackInstallCommand
+				? await this._isCorepackAvailable(terminal)
+				: false;
+			if (corepackAvailable && resolvedConfig.corepackCommand) {
+				serverCommand = replacePort(resolvedConfig.corepackCommand);
+			}
+			if (corepackAvailable && resolvedConfig.corepackInstallCommand) {
+				installCommand = replacePort(resolvedConfig.corepackInstallCommand);
+			}
+			this._serverCommand = serverCommand;
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (installCommand) {
+				if (waitForHealthy) {
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('installingDependencies', root, branchName, context, {
+						message: localize('appPreviewInstallingDependenciesMessage', "Installing dependencies before starting the preview server. A fresh install can take a few minutes."),
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+				}
+				const installResult = await this._runPreviewDependencyInstallCommand(terminal, installCommand, PREVIEW_DEPENDENCY_INSTALL_TIMEOUT, isCurrentStart, () => {
+					// Slow, not dead: the install is still running in this same terminal and is left
+					// completely alone. Tell the user and let them choose to keep waiting (do nothing)
+					// or restart - we never decide that for them, and _serverState deliberately stays
+					// 'starting' so the workspace branch poll can't mistake this for idle and restart it.
+					if (!isCurrentStart()) {
+						return;
+					}
+					this._serverMessage = localize('appPreviewInstallSlowMessage', "Dependency install is taking longer than expected.");
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('installSlow', root, branchName, context, {
+						message: this._serverMessage,
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+				});
+				if (!isCurrentStart()) {
+					return this.getPreviewStatus();
+				}
+				const installOutcome = resolveWorkbenchAppPreviewInstallOutcome({
+					serverTerminalExited: this._serverTerminalExited,
+					exitCode: installResult.exitCode,
+				});
+				if (installOutcome !== 'succeeded') {
+					this._serverState = 'failed';
+					this._serverHealth = 'unknown';
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(installResult.output ?? this._serverRecentOutput, installOutcome === 'crashed'
+						? localize('appPreviewInstallTerminalExitedMessage', "Preview terminal exited before dependency install finished.")
+						: localize('appPreviewInstallFailedMessage', "Dependency install failed before the preview server could start."));
+					this._previewStartupInProgress = false;
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('missingDependencies', root, branchName, context, {
+						message: this._serverMessage,
+						url: resolvedServer.url,
+						healthUrl: resolvedServer.healthUrl,
+						command: installCommand,
+						cwd
+					}));
+					return this.getPreviewStatus();
+				}
+				try {
+					await writeWorkbenchAppPreviewInstallHashMarker(this._fileService, root);
+				} catch (error) {
+					this._logService.warn('[WorkbenchAppPreview] Failed to record dependency install hash.', error);
+				}
+			}
+			if (waitForHealthy) {
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, context, {
+					message: localize('appPreviewServerStartingMessage', "Starting the preview server for this branch."),
+					url: resolvedServer.url,
+					healthUrl: resolvedServer.healthUrl,
+					command: serverCommand,
+					cwd
+				}));
+			}
+			await this._runPreviewServerTerminalCommand(terminal, serverCommand, root, branchName, context);
+			if (!isCurrentStart()) {
+				return this.getPreviewStatus();
+			}
+			if (this._serverState === 'starting') {
+				this._serverState = 'running';
+				this._serverMessage = this._needsConfigurationPrompt
+					? `Opened ${resolvedServer.url}. Ask the user whether to save this as the default URL for this branch.`
+					: `Opened ${resolvedServer.url}.`;
+			}
+			if (this._serverState !== 'running') {
+				return this.getPreviewStatus();
+			}
 			if (waitForHealthy) {
 				this._showPreviewStartupPage(this._createPreviewStartupPageState('healthChecking', root, branchName, context, {
 					message: localize('appPreviewHealthCheckingMessage', "The server is starting. Waiting for the preview health check to pass."),
 					url: resolvedServer.url,
 					healthUrl: resolvedServer.healthUrl,
-					command: resolvedServer.command,
+					command: serverCommand,
 					cwd
 				}));
-				const healthy = await this._waitForPreviewHealth(PREVIEW_STARTUP_HEALTH_TIMEOUT);
+				const healthy = await this._waitForPreviewHealth(PREVIEW_STARTUP_HEALTH_TIMEOUT, isCurrentStart);
 				if (!isCurrentStart()) {
 					return this.getPreviewStatus();
 				}
@@ -2101,7 +3173,37 @@ export class WorkbenchAppPreviewController extends Disposable {
 					}));
 					this._previewStartupInProgress = false;
 					this._startHealthPolling();
-					await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+					// Health succeeded even if the terminal output did not advertise a URL first.
+					// Mark the managed server URL as discovered so the handoff can keep it without
+					// enabling raw running-server fallback in unrelated preferred-url calls.
+					if (this._serverUrl && !isWorkbenchAppPreviewUrlForBranch(this._discoveredUrlBranchName, branchName)) {
+						this._discoveredUrl = this._serverUrl;
+						this._discoveredUrlBranchName = branchName;
+					}
+					const openedUrl = await this._navigatePreferredUrl({ isNewPreview: false, allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+					this._storeSuccessfulPreviewUrl(root, branchName, openedUrl);
+				} else if (getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+					serverState: this._serverState,
+					serverHealth: this._serverHealth,
+					serverTerminalExited: this._serverTerminalExited,
+					serverCommandActive: this._isPreviewServerCommandActive(),
+				}) === 'failed') {
+					this._serverHealth = 'unhealthy';
+					this._serverState = 'failed';
+					this._serverMessage = this._formatPreviewTerminalFailureMessage(
+						this._serverRecentOutput,
+						this._serverTerminalExited
+							? localize('appPreviewServerExitedMessage', "Preview server exited unexpectedly.")
+							: localize('appPreviewServerCommandInactiveMessage', "Preview server command exited before the app became available.")
+					);
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('failed', root, branchName, context, {
+						message: this._serverMessage,
+						url: this._serverUrl,
+						healthUrl: this._serverHealthUrl,
+						command: this._serverCommand,
+						cwd
+					}));
+					this._previewStartupInProgress = false;
 				} else {
 					this._serverHealth = 'unhealthy';
 					this._serverMessage = localize('appPreviewHealthTimeoutMessage', "Preview is taking longer than expected.");
@@ -2133,7 +3235,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 				message: this._serverMessage,
 				url: resolvedServer.url,
 				healthUrl: resolvedServer.healthUrl,
-				command: resolvedServer.command,
+				command: serverCommand,
 				cwd
 			}));
 		}
@@ -2158,30 +3260,38 @@ export class WorkbenchAppPreviewController extends Disposable {
 		preview.navigate(createWorkbenchAppPreviewStartupDataUrl(state, APP_PREVIEW_STARTUP_ANIMATION_SRC));
 	}
 
+	private _restorePreviewStartupPageAfterSuppressedLoadError(): void {
+		if (!this._previewStartupPageState) {
+			return;
+		}
+
+		this._previewStartupPageKey = undefined;
+		this._showPreviewStartupPage(this._previewStartupPageState);
+	}
+
 	private _getPreviewStartupStages(phase: PreviewStartupPhase): readonly IPreviewStartupStage[] {
 		if (phase === 'setup') {
-			return [{
-				label: localize('appPreviewStageConfigure', "Configure preview"),
-				status: 'current',
-				startedAt: this._previewStartupPhaseStartedAt
-			}];
+			return [];
 		}
 
 		const stageLabels = [
 			localize('appPreviewStagePrepare', "Prepare preview"),
+			localize('appPreviewStageInstallDependencies', "Install dependencies"),
 			localize('appPreviewStageStartServer', "Start server"),
 			localize('appPreviewStageWaitForApp', "Wait for app response"),
 			localize('appPreviewStageOpenPreview', "Open preview"),
 		];
 		const currentIndex = phase === 'starting'
 			? 0
-			: phase === 'serverStarting'
+			: phase === 'installingDependencies' || phase === 'installSlow'
 				? 1
-				: phase === 'healthChecking' || phase === 'slow'
+				: phase === 'serverStarting'
 					? 2
-					: phase === 'opening'
+					: phase === 'healthChecking' || phase === 'slow'
 						? 3
-						: stageLabels.length;
+						: phase === 'opening'
+							? 4
+							: stageLabels.length;
 
 		const stages = stageLabels.map((label, index): IPreviewStartupStage => ({
 			label,
@@ -2189,7 +3299,7 @@ export class WorkbenchAppPreviewController extends Disposable {
 			startedAt: index === currentIndex ? this._previewStartupPhaseStartedAt : undefined
 		}));
 
-		if (phase === 'failed') {
+		if (phase === 'failed' || phase === 'missingDependencies') {
 			return [
 				...stages.map(stage => stage.status === 'current' ? { ...stage, status: 'done' as const, startedAt: undefined } : stage),
 				{
@@ -2223,15 +3333,20 @@ export class WorkbenchAppPreviewController extends Disposable {
 		const title = getWorkbenchAppPreviewStartupTitle(phase, branchName);
 		const details = [
 			phase === 'starting' ? localize('appPreviewStartingDetails', "Switching branches is complete. The preview server is being prepared.") : undefined,
+			phase === 'installingDependencies' ? localize('appPreviewInstallingDependenciesDetails', "Dependencies are being installed before the server starts.") : undefined,
+			phase === 'installSlow' ? localize('appPreviewInstallSlowHint', "The install is still running in the background and has not been touched. Keep waiting, or restart if you'd rather start over.") : undefined,
 			phase === 'serverStarting' ? localize('appPreviewServerInitializing', "Server is initializing.") : undefined,
 			phase === 'healthChecking' ? localize('appPreviewHealthCheckWaiting', "Health check is waiting for the app to respond.") : undefined,
 			phase === 'slow' ? localize('appPreviewSlowHint', "The server may still be compiling or waiting on a dependency.") : undefined,
-			phase === 'failed' ? localize('appPreviewFailedHint', "Use the context below to ask the agent to diagnose the startup failure.") : undefined,
-			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a saved preview URL.") : undefined,
+			phase === 'missingDependencies' ? localize('appPreviewMissingDependenciesHint', "Dependency install did not complete. Check the terminal logs or retry the preview server.") : undefined,
+			phase === 'failed' ? localize('appPreviewFailedHint', "Check the terminal logs or restart the preview server.") : undefined,
+			phase === 'setup' ? localize('appPreviewSetupHint', "The current branch does not have a default URL.") : undefined,
 		].filter((value): value is string => !!value);
-		const actions: IPreviewStartupPageState['actions'] = phase === 'slow' || phase === 'failed' || phase === 'setup'
+		const actions: IPreviewStartupPageState['actions'] = phase === 'slow' || phase === 'installSlow'
 			? ['retry', 'restart', 'logs', 'copy']
-			: ['copy'];
+			: phase === 'setup'
+				? ['configure']
+				: (phase === 'failed' || phase === 'missingDependencies') ? ['retry', 'restart', 'logs'] : [];
 
 		return {
 			phase,
@@ -2274,21 +3389,44 @@ export class WorkbenchAppPreviewController extends Disposable {
 		].filter((value): value is string => !!value).join('\n');
 	}
 
-	private async _waitForPreviewHealth(timeoutMs: number): Promise<boolean> {
+	private async _waitForPreviewHealth(timeoutMs: number, isCurrent?: () => boolean): Promise<boolean> {
 		const startedAt = Date.now();
 		while (Date.now() - startedAt < timeoutMs) {
+			// A newer start (e.g. a fast branch switch) supersedes this one - stop polling immediately
+			// instead of running to the full timeout and mutating shared health state behind it.
+			if (isCurrent && !isCurrent()) {
+				return false;
+			}
 			if (await this._checkServerHealthNow()) {
 				return true;
+			}
+			if (this._serverTerminalExited) {
+				return false;
 			}
 			await new Promise(resolve => mainWindow.setTimeout(resolve, PREVIEW_STARTUP_HEALTH_INTERVAL));
 		}
 		return false;
 	}
 
+	private _isPreviewServerCommandActive(): boolean | undefined {
+		const commandDetection = this._serverTerminal?.capabilities.get(TerminalCapability.CommandDetection);
+		if (!commandDetection) {
+			return undefined;
+		}
+
+		if (commandDetection.executingCommandObject || commandDetection.executingCommand) {
+			return true;
+		}
+
+		return commandDetection.promptInputModel.state === PromptInputState.Input ? false : undefined;
+	}
+
 	private _stopPreviewServer(): void {
 		this._serverStartGeneration++;
 		this._serverHealthPollStore.clear();
 		this._serverTerminalExitStore.clear();
+		this._serverTerminalSentinel?.resolve({ output: this._serverRecentOutput, timedOut: true });
+		this._serverTerminalSentinel = undefined;
 		this._serverTerminal?.dispose();
 		this._serverTerminal = undefined;
 		this._serverTerminalExited = true;
@@ -2298,6 +3436,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 		this._activeManagedPreviewUrl = undefined;
 		this._serverHealthUrl = undefined;
 		this._serverHealthPath = undefined;
+		this._serverPreviewUrl = undefined;
+		this._serverPreviewSource = undefined;
 		this._serverBranch = undefined;
 		this._serverCommand = undefined;
 		this._serverPort = undefined;
@@ -2344,8 +3484,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 	}
 
 	private async _checkServerHealthCore(): Promise<void> {
-		const healthy = await this._checkServerHealthNow();
-		if (healthy) {
+		await this._checkServerHealthNow();
+		// Success requires a render-confirmed 'healthy' - not merely a reachable transport - so a
+		// server that answers HTTP while the app stays blank ('reachable') accrues failures and lets
+		// the watchdog recover it, instead of being pinned healthy forever.
+		if (this._serverHealth === 'healthy') {
 			this._consecutiveHealthFailures = 0;
 			this._backgroundRestartAttempts = 0;
 			await this._clearPreviewHealthOverlay();
@@ -2382,7 +3525,8 @@ export class WorkbenchAppPreviewController extends Disposable {
 			command: this._serverCommand,
 			cwd: this._serverCwd
 		}));
-		await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+		const openedUrl = await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
+		this._storeSuccessfulPreviewUrl(root, branchName, openedUrl);
 	}
 
 	private async _fetchHealth(url: string, init?: RequestInit): Promise<Response> {
@@ -2399,70 +3543,157 @@ export class WorkbenchAppPreviewController extends Disposable {
 		if (!this._serverHealthUrl || this._serverState !== 'running') {
 			return false;
 		}
+
+		const reachable = await this._probeServerReachable(this._serverHealthUrl);
+		if (!reachable) {
+			this._serverHealth = 'unhealthy';
+			return false;
+		}
+
+		// The server answered, but an HTTP 200 on an SPA only proves the shell is served - not that
+		// the app mounted. When the preview is actually pointed at the app, confirm it rendered so a
+		// blank/stale/foreign page can never be reported as healthy. Fail open when we cannot probe.
+		const previewOnServerOrigin = this._isPreviewOnServerOrigin();
+		const renderVerified = previewOnServerOrigin ? await this._probePreviewRender() : undefined;
+		this._serverHealth = resolveWorkbenchAppPreviewHealthFromSignals({ httpReachable: true, previewOnServerOrigin, renderVerified });
+		if (this._serverHealth === 'healthy') {
+			this._lastHealthError = undefined;
+		} else if (renderVerified === false) {
+			this._lastHealthError = 'The server responded but the app has not rendered yet.';
+		}
+		return reachable;
+	}
+
+	/** HTTP reachability probe for the dev server, preserving the browser fetch-mode fallbacks. */
+	private async _probeServerReachable(healthUrl: string): Promise<boolean> {
 		try {
-			const mode = getWorkbenchAppPreviewHealthFetchMode(this._serverHealthUrl);
-			const response = await this._fetchHealth(this._serverHealthUrl, { method: 'GET', cache: 'no-store', mode });
+			const mode = getWorkbenchAppPreviewHealthFetchMode(healthUrl);
+			const response = await this._fetchHealth(healthUrl, { method: 'GET', cache: 'no-store', mode });
 			if (mode === 'no-cors') {
-				this._serverHealth = 'healthy';
-				this._lastHealthError = undefined;
 				return true;
 			}
-			this._serverHealth = response.ok ? 'healthy' : 'unhealthy';
-			this._lastHealthError = response.ok ? undefined : `${response.status} ${response.statusText}`.trim();
+			if (!response.ok) {
+				this._lastHealthError = `${response.status} ${response.statusText}`.trim();
+			}
 			return response.ok;
 		} catch (error) {
 			try {
-				await this._fetchHealth(this._serverHealthUrl, { method: 'GET', cache: 'no-store', mode: 'no-cors' });
-				this._serverHealth = 'healthy';
-				this._lastHealthError = undefined;
+				await this._fetchHealth(healthUrl, { method: 'GET', cache: 'no-store', mode: 'no-cors' });
 				return true;
 			} catch {
 				this._lastHealthError = error instanceof Error ? `Health check request failed: ${error.message}` : 'Health check request failed.';
-				this._serverHealth = 'unhealthy';
 				return false;
 			}
 		}
 	}
 
-	private async _handlePreviewLoadingState(event: IBrowserViewLoadingEvent): Promise<void> {
-		if (event.loading || !event.error || this._previewStartupInProgress || this._previewLoadFailureRecoveryInFlight) {
-			return;
+	private _isPreviewOnServerOrigin(): boolean {
+		const preview = this._preview;
+		if (!preview || preview.isDisposed() || !this._serverUrl || !preview.url) {
+			return false;
 		}
-		if (!this._isRecoverablePreviewLoadError(event.error)) {
-			return;
-		}
-
-		const root = getWorkspaceRoot(this._workspaceContextService);
-		if (!root) {
-			return;
-		}
-
-		this._previewLoadFailureRecoveryInFlight = true;
 		try {
-			const branchName = await this._resolveWorkspaceBranchName(root);
-			this._lastHealthError = `${event.error.errorDescription} (${event.error.errorCode}) while loading ${event.error.url}`;
-			this._serverHealth = 'unhealthy';
-			if (event.error.errorCode === -7 && this._isManagedPreviewServerProcessAlive()) {
-				this._showPreviewStartupPage(this._createPreviewStartupPageState('slow', root, branchName, this._lastWorkspaceContext, {
-					message: localize('appPreviewLoadTimedOutWaiting', "Preview is taking longer than expected. Waiting for the app to respond."),
+			return new URL(preview.url).origin === new URL(this._serverUrl).origin;
+		} catch {
+			return false;
+		}
+	}
+
+	/**
+	 * Probe the live preview page for whether the app actually rendered. Returns true/false when the
+	 * page could be inspected, or undefined when it could not (no session, timeout, cross-origin) so
+	 * callers fail open. Uses a generic signal - the document is complete and the app root has real
+	 * content - rather than any framework-specific title, so it works across dev servers.
+	 */
+	private async _probePreviewRender(): Promise<boolean | undefined> {
+		const preview = this._preview;
+		if (!preview || preview.isDisposed()) {
+			return undefined;
+		}
+		const timeoutPromise = timeout(PREVIEW_RENDER_PROBE_TIMEOUT);
+		try {
+			const probe = playwrightInvokeRaw(this._playwrightService, APP_PREVIEW_PLAYWRIGHT_SESSION_ID, preview.id, (page) => page.evaluate(() => {
+				const roots = [document.getElementById('root'), document.querySelector('#app'), document.querySelector('[data-reactroot]'), document.querySelector('main'), document.body];
+				const root = roots.find(candidate => !!candidate) ?? undefined;
+				return { readyState: document.readyState, childElementCount: root ? root.childElementCount : 0 };
+			}));
+			const result = await Promise.race([
+				probe.catch(() => undefined),
+				timeoutPromise.then(() => undefined, () => undefined),
+			]);
+			if (!result) {
+				return undefined;
+			}
+			return result.readyState === 'complete' && result.childElementCount > 0;
+		} catch (error) {
+			this._logService.trace('[WorkbenchAppPreview] Preview render probe failed.', error);
+			return undefined;
+		} finally {
+			timeoutPromise.cancel();
+		}
+	}
+
+	private async _handlePreviewLoadingState(event: IBrowserViewLoadingEvent): Promise<void> {
+		if (event.error && !shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: this._previewStartupInProgress,
+			errorUrl: event.error.url,
+			errorCode: event.error.errorCode,
+		})) {
+			this._restorePreviewStartupPageAfterSuppressedLoadError();
+		}
+
+		if (shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: event.loading,
+			hasError: !!event.error,
+			previewStartupInProgress: this._previewStartupInProgress,
+			previewLoadFailureRecoveryInFlight: this._previewLoadFailureRecoveryInFlight,
+			serverStartInFlight: !!this._serverStartInFlight,
+		}) || !event.error) {
+			return;
+		}
+
+		if (this._isRecoverablePreviewLoadError(event.error)) {
+			const root = getWorkspaceRoot(this._workspaceContextService);
+			if (!root) {
+				return;
+			}
+
+			this._previewLoadFailureRecoveryInFlight = true;
+			try {
+				const branchName = await this._resolveWorkspaceBranchName(root);
+				this._lastHealthError = `${event.error.errorDescription} (${event.error.errorCode}) while loading ${event.error.url}`;
+				this._serverHealth = 'unhealthy';
+				if (!shouldRestartWorkbenchAppPreviewAfterLoadError({
+					recoverableLoadError: true,
+					serverProcessAlive: this._isManagedPreviewServerProcessAlive(),
+					serverState: this._serverState,
+				})) {
+					this._showPreviewStartupPage(this._createPreviewStartupPageState('slow', root, branchName, this._lastWorkspaceContext, {
+						message: localize('appPreviewLoadTimedOutWaiting', "Preview is taking longer than expected. Waiting for the app to respond."),
+						url: this._serverUrl ?? event.error.url,
+						healthUrl: this._serverHealthUrl,
+						command: this._serverCommand,
+						cwd: this._serverCwd
+					}));
+					return;
+				}
+
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
+					message: localize('appPreviewLoadFailedRestarting', "Preview lost connection. Restarting the server and reopening when it is ready."),
 					url: this._serverUrl ?? event.error.url,
 					healthUrl: this._serverHealthUrl,
 					command: this._serverCommand,
 					cwd: this._serverCwd
 				}));
-				return;
+				await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
+			} finally {
+				this._previewLoadFailureRecoveryInFlight = false;
 			}
+			return;
+		}
 
-			this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
-				message: localize('appPreviewLoadFailedRestarting', "Preview lost connection. Restarting the server and reopening when it is ready."),
-				url: this._serverUrl ?? event.error.url,
-				healthUrl: this._serverHealthUrl,
-				command: this._serverCommand,
-				cwd: this._serverCwd
-			}));
-			await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
-		} finally {
-			this._previewLoadFailureRecoveryInFlight = false;
+		if (this._isUnmanagedLocalhostConnectionFailure(event.error)) {
+			await this._handleUnmanagedLocalhostConnectionFailure(event.error);
 		}
 	}
 
@@ -2473,6 +3704,38 @@ export class WorkbenchAppPreviewController extends Disposable {
 			serverUrl: this._serverUrl,
 			activeManagedPreviewUrl: this._activeManagedPreviewUrl,
 		});
+	}
+
+	private _isUnmanagedLocalhostConnectionFailure(error: IBrowserViewLoadError): boolean {
+		return (
+			(error.errorCode === -102 || error.errorCode === -105 || error.errorCode === -106) &&
+			isWorkbenchAppPreviewLoopbackUrl(error.url)
+		);
+	}
+
+	private async _handleUnmanagedLocalhostConnectionFailure(error: IBrowserViewLoadError): Promise<void> {
+		const root = getWorkspaceRoot(this._workspaceContextService);
+		if (!root) {
+			return;
+		}
+
+		this._previewLoadFailureRecoveryInFlight = true;
+		try {
+			const branchName = await this._resolveWorkspaceBranchName(root);
+			const devConfig = await readDevConfig(this._fileService, root);
+
+			if (devConfig) {
+				this._showPreviewStartupPage(this._createPreviewStartupPageState('serverStarting', root, branchName, this._lastWorkspaceContext, {
+					message: localize('appPreviewUnmanagedStarting', "Preview server is not running. Starting it now."),
+					url: error.url,
+				}));
+				await this._startPreviewServer(true, await this._getOrAssignBranchPort(root, branchName), false, true, this._lastWorkspaceContext);
+			} else {
+				this._showPreviewSetupState(root, branchName);
+			}
+		} finally {
+			this._previewLoadFailureRecoveryInFlight = false;
+		}
 	}
 
 	private async _handleBackgroundHealthFailure(): Promise<void> {
@@ -2505,7 +3768,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 			maxBackgroundRestartAttempts: MAX_BACKGROUND_RESTART_ATTEMPTS,
 		})) {
 			this._consecutiveHealthFailures = 0;
-			this._serverMessage = localize('appPreviewHealthCheckWaitingLiveProcess', "Preview server is still running. Waiting for it to respond.");
+			// Distinguish "transport is down" from "server answers but the app never mounted" so the
+			// reachable-but-blank state is explained rather than presented as a silent spinner.
+			this._serverMessage = this._serverHealth === 'reachable'
+				? localize('appPreviewReachableNotRendered', "Preview server is responding but the app has not rendered yet. Waiting for it to mount.")
+				: localize('appPreviewHealthCheckWaitingLiveProcess', "Preview server is still running. Waiting for it to respond.");
 			return;
 		}
 
@@ -2525,6 +3792,11 @@ export class WorkbenchAppPreviewController extends Disposable {
 				this._consecutiveHealthFailures = 0;
 				this._backgroundRestartAttempts = 0;
 				await this._clearPreviewHealthOverlay();
+				// The restarted server may be serving a stale/errored page from before the crash
+				// (a health overlay only draws on top of the existing page, it doesn't reload it),
+				// and may have landed on a different port (see _reconcileDiscoveredServerPort).
+				// Force a re-navigate to the real, current URL now that it's confirmed healthy.
+				await this._navigatePreferredUrl({ allowDuringStartup: true, forceNavigate: true, preferRunningServer: true });
 				return;
 			}
 
@@ -2682,16 +3954,34 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 	private async _getOrAssignBranchPort(root: URI, branchName: string | undefined): Promise<number> {
 		const runtime = getBranchRuntime(this._storageService, root, branchName);
-		if (runtime.port && this._serverBranch === branchName) {
+		if (runtime.port && this._serverBranch === branchName && this._isManagedPreviewServerProcessAlive()) {
 			return runtime.port;
 		}
-		if (runtime.port && await this._isPortAvailable(runtime.port)) {
+		if (runtime.port && await this._isPortSafeToReuse(runtime.port, root)) {
 			return runtime.port;
 		}
 
 		const port = await this._findAvailablePort();
 		storeBranchRuntime(this._storageService, root, branchName, { ...runtime, port });
 		return port;
+	}
+
+	/**
+	 * A port with nothing bound to it is always safe. A port that's already occupied is only
+	 * safe to reuse if whatever is bound to it is running out of this same repo (e.g. a dev
+	 * server started independently of Parakit, per the .designer/dev.json no-op pattern) —
+	 * otherwise it's treated as a stale/unrelated process and a fresh port is picked instead.
+	 */
+	private async _isPortSafeToReuse(port: number, root: URI): Promise<boolean> {
+		if (await this._isPortAvailable(port)) {
+			return true;
+		}
+		try {
+			const owner = await this._nativeHostService.getPortOwner(port);
+			return !!owner?.cwd && isWorkbenchAppPreviewPathUnderRoot(owner.cwd, root.fsPath);
+		} catch {
+			return false;
+		}
 	}
 
 	private async _getCurrentBranchPort(): Promise<number | undefined> {
@@ -2705,6 +3995,92 @@ export class WorkbenchAppPreviewController extends Disposable {
 
 	private async _isPortAvailable(port: number): Promise<boolean> {
 		return this._nativeHostService.isPortFree(port);
+	}
+
+	/**
+	 * Ensure a repo-fixed port is actually available for our dev server before we launch.
+	 *
+	 * Unlike a dynamically assigned port, a fixed port cannot be swapped for a free one - the built
+	 * HTML pins its asset URLs to it - so if something else holds it the dev server silently binds a
+	 * different port and the preview renders the wrong app (or nothing). We therefore verify who owns
+	 * the port and make it ours:
+	 * - Free -> ready.
+	 * - Held by a process running out of this repo -> reuse it (our own just-stopped server releasing
+	 *   the socket, or an independently started dev server per the .designer/dev.json no-op pattern).
+	 * - Held by a foreign process -> auto-close it (SIGTERM, then SIGKILL) and wait for release.
+	 */
+	private async _ensureRequiredPortAvailable(port: number, root: URI): Promise<{ ok: true } | { ok: false; message: string }> {
+		if (await this._isPortAvailable(port)) {
+			return { ok: true };
+		}
+
+		let owner: IWorkbenchAppPreviewPortOwner | undefined;
+		try {
+			owner = await this._nativeHostService.getPortOwner(port);
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] Could not determine the owner of required port ${port}.`, error);
+			owner = undefined;
+		}
+
+		const action = resolveWorkbenchAppPreviewFixedPortAction({ portFree: false, owner, rootPath: root.fsPath });
+		if (action === 'reuseRepoLocal') {
+			// Our own previous server tearing down, or an intentional repo-local dev server. Give a
+			// just-stopped process a moment to release the socket; if it persists we adopt it as-is.
+			await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+			return { ok: true };
+		}
+		if (action === 'closeForeign' && owner) {
+			await this._closeForeignPortOwner(port, owner);
+		} else {
+			// Occupied but the owner is unknown - best effort wait for it to clear on its own.
+			await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+		}
+
+		if (await this._isPortAvailable(port)) {
+			return { ok: true };
+		}
+
+		const who = owner
+			? `another process (pid ${owner.pid}${owner.cwd ? `, ${owner.cwd}` : ''})`
+			: 'another process';
+		return {
+			ok: false,
+			message: `Port ${port} is required by this app but is held by ${who} that could not be closed automatically. Close it and restart App Preview.`,
+		};
+	}
+
+	/**
+	 * Auto-close a foreign process squatting on a required fixed port: SIGTERM first for a graceful
+	 * exit, then SIGKILL if it does not release the socket in time. `getPortOwner` returns the actual
+	 * listener pid, so killing it frees the port even when it is a child of another launcher.
+	 */
+	private async _closeForeignPortOwner(port: number, owner: IWorkbenchAppPreviewPortOwner): Promise<void> {
+		this._logService.info(`[WorkbenchAppPreview] Required port ${port} is held by a foreign process (pid ${owner.pid}${owner.cwd ? `, cwd ${owner.cwd}` : ''}); auto-closing it so the preview can bind the correct port.`);
+		try {
+			await this._nativeHostService.killProcess(owner.pid, 'SIGTERM');
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] SIGTERM of pid ${owner.pid} failed.`, error);
+		}
+		if (await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT)) {
+			return;
+		}
+		try {
+			await this._nativeHostService.killProcess(owner.pid, 'SIGKILL');
+		} catch (error) {
+			this._logService.warn(`[WorkbenchAppPreview] SIGKILL of pid ${owner.pid} failed.`, error);
+		}
+		await this._waitForPortFree(port, PREVIEW_PORT_RELEASE_TIMEOUT);
+	}
+
+	private async _waitForPortFree(port: number, timeoutMs: number): Promise<boolean> {
+		const deadline = Date.now() + timeoutMs;
+		while (Date.now() < deadline) {
+			if (await this._isPortAvailable(port)) {
+				return true;
+			}
+			await timeout(PREVIEW_PORT_POLL_INTERVAL);
+		}
+		return this._isPortAvailable(port);
 	}
 
 	private _registerPreviewTools(): void {
@@ -2808,8 +4184,8 @@ class RestartPreviewServerTool extends AppPreviewTool {
 const PromotePreviewUrlToolData: IToolData = {
 	id: AppPreviewToolReferenceName.PromotePreviewUrl,
 	toolReferenceName: AppPreviewToolReferenceName.PromotePreviewUrl,
-	displayName: localize('promotePreviewUrlTool.displayName', "Promote Preview URL"),
-	modelDescription: 'After explicit user approval, save the current or provided preview URL into .designer/preview.json for the current Git branch.',
+	displayName: localize('promotePreviewUrlTool.displayName', "Save Default URL"),
+	modelDescription: 'After explicit user approval, save the current or provided URL as the default URL for the current Git branch in .designer/preview.json.',
 	icon: Codicon.save,
 	source: ToolDataSource.Internal,
 	inputSchema: {
@@ -2826,11 +4202,11 @@ const PromotePreviewUrlToolData: IToolData = {
 class PromotePreviewUrlTool extends AppPreviewTool {
 	override async prepareToolInvocation(): Promise<IPreparedToolInvocation> {
 		return {
-			invocationMessage: localize('promotePreviewUrlTool.invocation', "Saving preview URL"),
-			pastTenseMessage: localize('promotePreviewUrlTool.past', "Saved preview URL"),
+			invocationMessage: localize('promotePreviewUrlTool.invocation', "Saving default URL"),
+			pastTenseMessage: localize('promotePreviewUrlTool.past', "Saved default URL"),
 			confirmationMessages: {
-				title: localize('promotePreviewUrlTool.confirmTitle', "Save Project Preview URL?"),
-				message: localize('promotePreviewUrlTool.confirmMessage', "This writes the preview URL into .designer/preview.json for the current branch."),
+				title: localize('promotePreviewUrlTool.confirmTitle', "Save Default URL?"),
+				message: localize('promotePreviewUrlTool.confirmMessage', "This writes the URL that opens by default for the current branch into .designer/preview.json."),
 			},
 		};
 	}
@@ -2845,7 +4221,7 @@ class ConfigureWorkbenchAppPreviewUrlAction extends Action2 {
 	constructor() {
 		super({
 			id: ConfigureWorkbenchAppPreviewUrlCommandId,
-			title: localize2('configureWorkbenchAppPreviewUrl', "Override Preview URL"),
+			title: localize2('configureWorkbenchAppPreviewUrl', "Set Default URL"),
 			f1: true,
 		});
 	}
@@ -2906,7 +4282,7 @@ class ClearWorkbenchAppPreviewOverrideAction extends Action2 {
 	constructor() {
 		super({
 			id: ClearWorkbenchAppPreviewOverrideCommandId,
-			title: localize2('clearWorkbenchAppPreviewOverride', "Clear Preview Override"),
+			title: localize2('clearWorkbenchAppPreviewOverride', "Clear Default URL Override"),
 			f1: true,
 		});
 	}
@@ -2952,7 +4328,7 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 	constructor() {
 		super({
 			id: EditWorkbenchAppPreviewProjectUrlCommandId,
-			title: localize2('editWorkbenchAppPreviewProjectUrl', "Edit Project Preview URL"),
+			title: localize2('editWorkbenchAppPreviewProjectUrl', "Edit Default URL"),
 			f1: true,
 		});
 	}
@@ -2975,7 +4351,7 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 				{ label: localize('editProjectDefault', "Default"), description: localize('editProjectDefaultDescription', "Shared default for this repo") },
 			], {
 				canPickMany: false,
-				placeHolder: localize('editProjectPreviewScope', "Choose which project preview URL to edit"),
+				placeHolder: localize('editProjectPreviewScope', "Choose which default URL to edit"),
 				ignoreFocusLost: true,
 			});
 			if (!pick) {
@@ -2987,14 +4363,14 @@ class EditWorkbenchAppPreviewProjectUrlAction extends Action2 {
 		const config = await readPreviewConfig(fileService, root);
 		const currentUrl = getPreviewUrlForBranch(config, targetBranch);
 		const url = await quickInputService.input({
-			title: localize('editProjectPreviewUrlTitle', "Edit Project Preview URL"),
-			prompt: localize('editProjectPreviewUrlPrompt', "Enter the shared project preview URL."),
+			title: localize('editProjectPreviewUrlTitle', "Edit Default URL"),
+			prompt: localize('editProjectPreviewUrlPrompt', "Enter the URL that opens by default."),
 			placeHolder: 'http://localhost:3000',
 			value: currentUrl ?? '',
 			ignoreFocusLost: true,
 			validateInput: async value => {
 				if (!value.trim()) {
-					return localize('requiredProjectPreviewUrl', "Enter a preview URL.");
+					return localize('requiredProjectPreviewUrl', "Enter a default URL.");
 				}
 				return normalizeHttpUrl(value.trim()) ? undefined : localize('invalidProjectPreviewUrl', "Enter a valid http or https URL.");
 			}

@@ -14,6 +14,7 @@ interface DesignerWorkspaceTrustFolderOptions {
 	readonly path?: string;
 	readonly name?: string;
 	readonly url?: string;
+	readonly branchName?: string;
 }
 
 type DesignerWorkspaceTrustFolderArgument = string | DesignerWorkspaceTrustFolderOptions | undefined;
@@ -50,7 +51,7 @@ export async function trustDesignerManagedFolder(
 		url: options?.url,
 		addedAt: Date.now()
 	});
-	const updatedState = updateDesignerLastActiveRepo(await readDesignerState(fileService, nativeEnvironment.userHome), repoPath);
+	const updatedState = updateDesignerLastActiveRepo(await readDesignerState(fileService, nativeEnvironment.userHome), repoPath, options?.branchName);
 
 	await writeDesignerManagedReposManifest(fileService, nativeEnvironment.userHome, updatedManifest);
 	await writeDesignerState(fileService, nativeEnvironment.userHome, updatedState);

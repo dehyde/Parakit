@@ -46,7 +46,10 @@ suite('BrowserOverlayManager', () => {
 
 		const overlays = manager.getOverlappingOverlays(browserContainer);
 
-		assert.deepStrictEqual(overlays.map(o => o.type), [BrowserOverlayType.Dialog]);
+		assert.deepStrictEqual(overlays.map(o => ({
+			type: o.type,
+			pausesBrowser: o.pausesBrowser
+		})), [{ type: BrowserOverlayType.Dialog, pausesBrowser: true }]);
 	});
 
 	test('does not detect an overlay that does not overlap the browser container', () => {
@@ -68,6 +71,19 @@ suite('BrowserOverlayManager', () => {
 		});
 		addElement('designer-branch-switcher__dropdown', {
 			position: 'fixed', left: '12px', top: '38px', width: '320px', height: '220px', zIndex: '100000'
+		});
+
+		const overlays = manager.getOverlappingOverlays(browserContainer);
+
+		assert.deepStrictEqual(overlays.map(o => o.type), [BrowserOverlayType.Menu]);
+	});
+
+	test('detects app preview variants dropdown over the browser container', () => {
+		const browserContainer = addElement('browser-container', {
+			position: 'absolute', left: '250px', top: '40px', width: '300px', height: '300px'
+		});
+		addElement('browser-scenario-panel', {
+			position: 'fixed', left: '12px', top: '38px', width: '380px', height: '520px', zIndex: '100000'
 		});
 
 		const overlays = manager.getOverlappingOverlays(browserContainer);

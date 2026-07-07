@@ -309,7 +309,9 @@ export class BrowserViewWorkbenchService extends Disposable implements IBrowserV
 		const model = this.instantiationService.createInstance(BrowserViewModel, id, owner, state, this._browserViewService);
 
 		// Sanity: both pass and assign the model to be sure. It will no-op if already set.
-		this.getOrCreateLazy(id, {}, { kind: owner.kind }, model).model = model;
+		this.getOrCreateLazy(id, {
+			isSessionAppPreviewAuth: state.isSessionAppPreviewAuth,
+		}, { kind: owner.kind }, model).model = model;
 
 		this._onDidChangeBrowserViews.fire();
 

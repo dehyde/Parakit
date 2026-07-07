@@ -45,7 +45,7 @@ class WebContentsViewRendererFeature extends BrowserEditorContribution {
 	private _container: HTMLElement | undefined;
 	private _model: IBrowserViewModel | undefined;
 	private _editorVisible = false;
-	private _overlayObscured = false;
+	private _browserPausedByOverlay = false;
 
 	private readonly _placeholderScreenshot = $('.browser-placeholder-screenshot');
 	private readonly _overlayPauseEl = $('.browser-overlay-paused');
@@ -209,7 +209,7 @@ class WebContentsViewRendererFeature extends BrowserEditorContribution {
 
 	private _shouldShowPage(): boolean {
 		return this._editorVisible
-			&& !this._overlayObscured
+			&& !this._browserPausedByOverlay
 			&& !!this._model?.url
 			&& !this._model?.error;
 	}
@@ -224,8 +224,8 @@ class WebContentsViewRendererFeature extends BrowserEditorContribution {
 		const placeholderActive = !!this._model?.url && !this._model?.error;
 		this._placeholderScreenshot.style.display = placeholderActive ? '' : 'none';
 
-		// Overlay-pause overlay: fades in when an overlay obscures the page.
-		const pauseActive = !!this._model?.url && this._editorVisible && this._overlayObscured;
+		// Overlay-pause overlay: fades in when a pausing overlay obscures the page.
+		const pauseActive = !!this._model?.url && this._editorVisible && this._browserPausedByOverlay;
 		this._overlayPauseEl.classList.toggle('visible', pauseActive);
 
 		if (!this._model) {
@@ -259,11 +259,11 @@ class WebContentsViewRendererFeature extends BrowserEditorContribution {
 			return;
 		}
 		const overlays = this._overlayManager.getOverlappingOverlays(this._container);
-		const obscured = overlays.length > 0;
-		const hasNotification = overlays.some(o => o.type === BrowserOverlayType.Notification);
+		const browserPausedByOverlay = overlays.some(o => o.pausesBrowser);
+		const hasNotification = overlays.some(o => o.pausesBrowser && o.type === BrowserOverlayType.Notification);
 		this._overlayPauseEl.classList.toggle('show-message', hasNotification);
-		if (obscured !== this._overlayObscured) {
-			this._overlayObscured = obscured;
+		if (browserPausedByOverlay !== this._browserPausedByOverlay) {
+			this._browserPausedByOverlay = browserPausedByOverlay;
 			this._refresh();
 		}
 	}

@@ -8,7 +8,10 @@ import { pathToFileURL } from 'url';
 
 const DiscoveryFileName = 'parakit-app-preview-bridge.json';
 const RequestLimit = 2 * 1024 * 1024;
-const AppPreviewSkillPath = path.join('resources', 'app-preview-skill', 'SKILL.md');
+const ManagedClaudeSkills = [
+	{ name: 'app-preview', path: path.join('resources', 'app-preview-skill', 'SKILL.md') },
+	{ name: 'app-variants', path: path.join('resources', 'app-variants-skill', 'SKILL.md') },
+] as const;
 const ClaudePluginMarketplace = 'parakit';
 const ClaudePluginName = 'parakit-app-preview';
 const ClaudePluginVersion = '0.1.0';
@@ -77,7 +80,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 	await writeDiscovery(context, address.port, token);
 	await ensureClaudeMcpConfig(context);
 	await ensureClaudePlugin(context);
-	await ensureClaudeAppPreviewSkill(context);
+	await ensureClaudeManagedSkills(context);
 	console.info(`Parakit App Preview bridge listening on 127.0.0.1:${address.port}.`);
 }
 
@@ -122,6 +125,9 @@ async function runOperation(route: string, payload: unknown): Promise<unknown> {
 		case '/click_app_preview':
 		case '/click':
 			return vscode.commands.executeCommand('workbench.action.appPreview.click', args);
+		case '/inspect_app_preview_element':
+		case '/inspect':
+			return vscode.commands.executeCommand('workbench.action.appPreview.inspectElement', args);
 		case '/type_in_app_preview':
 		case '/type':
 			return vscode.commands.executeCommand('workbench.action.appPreview.type', args);
@@ -220,7 +226,6 @@ async function writeClaudePluginFiles(context: vscode.ExtensionContext, pluginPa
 	};
 
 	await fs.promises.mkdir(path.join(pluginPath, '.claude-plugin'), { recursive: true });
-	await fs.promises.mkdir(path.join(pluginPath, 'skills', 'app-preview'), { recursive: true });
 	await fs.promises.writeFile(
 		path.join(pluginPath, '.claude-plugin', 'plugin.json'),
 		`${JSON.stringify(pluginManifest, undefined, 2)}\n`,
@@ -230,8 +235,11 @@ async function writeClaudePluginFiles(context: vscode.ExtensionContext, pluginPa
 		`${JSON.stringify(mcpConfig, undefined, 2)}\n`,
 	);
 
-	const skillContent = await fs.promises.readFile(context.asAbsolutePath(AppPreviewSkillPath), 'utf8');
-	await fs.promises.writeFile(path.join(pluginPath, 'skills', 'app-preview', 'SKILL.md'), skillContent);
+	for (const skill of ManagedClaudeSkills) {
+		await fs.promises.mkdir(path.join(pluginPath, 'skills', skill.name), { recursive: true });
+		const skillContent = await fs.promises.readFile(context.asAbsolutePath(skill.path), 'utf8');
+		await fs.promises.writeFile(path.join(pluginPath, 'skills', skill.name, 'SKILL.md'), skillContent);
+	}
 }
 
 async function ensureClaudeMarketplace(): Promise<void> {
@@ -300,12 +308,14 @@ async function ensureClaudePluginInstalled(pluginPath: string): Promise<void> {
 	await fs.promises.writeFile(installedPluginsPath, `${JSON.stringify(installedPlugins, undefined, 2)}\n`);
 }
 
-async function ensureClaudeAppPreviewSkill(context: vscode.ExtensionContext): Promise<void> {
-	const sourcePath = context.asAbsolutePath(AppPreviewSkillPath);
-	const targetPath = path.join(os.homedir(), '.claude', 'skills', 'app-preview', 'SKILL.md');
-	const content = await fs.promises.readFile(sourcePath, 'utf8');
-	await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-	await fs.promises.writeFile(targetPath, content);
+async function ensureClaudeManagedSkills(context: vscode.ExtensionContext): Promise<void> {
+	for (const skill of ManagedClaudeSkills) {
+		const sourcePath = context.asAbsolutePath(skill.path);
+		const targetPath = path.join(os.homedir(), '.claude', 'skills', skill.name, 'SKILL.md');
+		const content = await fs.promises.readFile(sourcePath, 'utf8');
+		await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
+		await fs.promises.writeFile(targetPath, content);
+	}
 }
 
 async function readClaudeSettings(settingsPath: string): Promise<ClaudeSettings> {

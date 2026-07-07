@@ -61,7 +61,7 @@ export class BrowserWelcomeFeature extends BrowserEditorContribution {
 
 		this._configureButton = document.createElement('button');
 		this._configureButton.className = 'browser-welcome-configure-button';
-		this._configureButton.textContent = localize('browser.configureAppPreviewUrl', "Configure URL");
+		this._configureButton.textContent = localize('browser.configureAppPreviewUrl', "Set default URL");
 		this._configureButton.addEventListener('click', () => {
 			void this.commandService.executeCommand('workbench.action.agentSessions.configureAppPreviewUrl');
 		});

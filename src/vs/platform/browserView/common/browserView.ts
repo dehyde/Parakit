@@ -74,7 +74,14 @@ export interface IElementData {
 	readonly dimensions?: { readonly top: number; readonly left: number; readonly width: number; readonly height: number };
 	readonly innerText?: string;
 	readonly matchedStyleRules?: readonly IElementMatchedStyleRule[];
-	readonly reactComponents?: readonly IElementReactComponent[];
+	readonly components?: readonly IElementComponent[];
+	readonly states?: readonly IElementStateStyles[];
+}
+
+export interface IElementStateStyles {
+	readonly state: string;
+	readonly computedStyles: Record<string, string>;
+	readonly matchedStyleRules: readonly IElementMatchedStyleRule[];
 }
 
 export interface IElementMatchedStyleRule {
@@ -92,8 +99,11 @@ export interface IElementMatchedStyleProperty {
 	readonly value: string;
 }
 
-export interface IElementReactComponent {
+export type IElementComponentFramework = 'react' | 'vue' | 'web-component';
+
+export interface IElementComponent {
 	readonly name: string;
+	readonly framework: IElementComponentFramework;
 	readonly source?: string;
 	readonly props?: readonly IElementReactProp[];
 }
@@ -101,6 +111,24 @@ export interface IElementReactComponent {
 export interface IElementReactProp {
 	readonly name: string;
 	readonly value: string;
+}
+
+export interface IBrowserViewInspectorPanelProperty {
+	readonly name: string;
+	readonly value: string;
+	readonly token?: string;
+}
+
+export interface IBrowserViewInspectorPanelGroup {
+	readonly id: string;
+	readonly label: string;
+	readonly properties: readonly IBrowserViewInspectorPanelProperty[];
+}
+
+export interface IBrowserViewInspectorPanelPayload {
+	readonly componentName?: string;
+	readonly bounds: { readonly x: number; readonly y: number; readonly width: number; readonly height: number };
+	readonly groups: readonly IBrowserViewInspectorPanelGroup[];
 }
 
 export interface IBrowserViewRect {
@@ -211,9 +239,11 @@ export interface IBrowserViewAuthNavigationRequest {
 	readonly currentUrl: string | undefined;
 	readonly targetUrl: string;
 	readonly inAuthWindow?: boolean;
+	readonly hasActiveAuthWindow?: boolean;
 }
 
 export type BrowserViewAuthNavigationAction = 'allow' | 'openInternal' | 'returnToPreview';
+export type BrowserViewAuthWindowOpenAction = BrowserViewAuthNavigationAction | 'reuseAuthWindow';
 
 export interface IBrowserViewKindInitialState {
 	readonly isSessionAppPreview?: boolean;
@@ -303,11 +333,32 @@ export function getBrowserViewAuthNavigationAction(request: IBrowserViewAuthNavi
 		return 'allow';
 	}
 
-	if (request.inAuthWindow && isBrowserViewLocalHttpUrl(request.targetUrl)) {
-		return 'returnToPreview';
+	if (request.inAuthWindow) {
+		return isBrowserViewLocalHttpUrl(request.targetUrl) ? 'returnToPreview' : 'allow';
 	}
 
 	if (!isBrowserViewLocalHttpUrl(request.targetUrl)) {
+		return 'openInternal';
+	}
+
+	return 'allow';
+}
+
+export function getBrowserViewAuthWindowOpenAction(request: IBrowserViewAuthNavigationRequest): BrowserViewAuthWindowOpenAction {
+	if (request.kind === BrowserViewKind.AppPreview && request.hasActiveAuthWindow && isBrowserViewWebUrl(request.targetUrl) && !isBrowserViewLocalHttpUrl(request.targetUrl)) {
+		return 'reuseAuthWindow';
+	}
+
+	const navigationAction = getBrowserViewAuthNavigationAction(request);
+	if (navigationAction !== 'allow') {
+		return navigationAction;
+	}
+
+	if (request.kind === BrowserViewKind.AppPreview && request.inAuthWindow && isBrowserViewWebUrl(request.targetUrl)) {
+		return 'reuseAuthWindow';
+	}
+
+	if (shouldOpenBrowserViewTargetInternally(request.targetUrl)) {
 		return 'openInternal';
 	}
 
@@ -331,6 +382,7 @@ export interface IBrowserViewOpenOptions {
 	readonly preserveFocus?: boolean;
 	readonly background?: boolean;
 	readonly pinned?: boolean;
+	readonly isSessionAppPreviewAuth?: boolean;
 	/** The parent view ID. Used by the workbench to place the new tab in the same editor group. */
 	readonly parentViewId?: string;
 	/** When set, open in an auxiliary (new) window with these bounds. */
@@ -359,6 +411,7 @@ export interface IBrowserViewStorageKeys {
 export interface IBrowserViewState {
 	url: string;
 	title: string;
+	isSessionAppPreviewAuth?: boolean;
 	canGoBack: boolean;
 	canGoForward: boolean;
 	loading: boolean;
@@ -716,6 +769,8 @@ export interface IBrowserViewService {
 	 * @param enabled Whether to enable or disable. Omit to toggle.
 	 */
 	toggleElementSelection(id: string, enabled?: boolean): Promise<void>;
+	showElementInspectorPanel(id: string, payload: IBrowserViewInspectorPanelPayload): Promise<void>;
+	hideElementInspectorPanel(id: string): Promise<void>;
 
 	/**
 	 * Toggle drag-to-select area picking on the top frame of a browser view.

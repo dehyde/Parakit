@@ -9,97 +9,16 @@ import { Emitter } from '../../../../base/common/event.js';
 import { getErrorMessage } from '../../../../base/common/errors.js';
 import { Disposable, DisposableStore, toDisposable } from '../../../../base/common/lifecycle.js';
 import { CommandsRegistry, ICommandService } from '../../../../platform/commands/common/commands.js';
-import { IDialogService } from '../../../../platform/dialogs/common/dialogs.js';
+import { IDialogService, IFileDialogService } from '../../../../platform/dialogs/common/dialogs.js';
 import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
 import { localize } from '../../../../nls.js';
+import { GetDesignerBranchesStateCommandId, GetDesignerReposStateCommandId, SaveAndCheckoutDesignerBranchCommandId, SwitchDesignerRepoCommandId, CheckoutDesignerBranchCommandId, type DesignerBranchCheckoutResult, type DesignerBranchItem, type DesignerBranchSetup, type DesignerBranchState, type DesignerBranchTreeNode, type DesignerRepoItem, type DesignerRepoRemoveResult, type DesignerRepoState, type DesignerRepoSwitchResult, type DesignerSyncState } from '../../../services/workspaces/common/designerRepoCommands.js';
 
 const onDidChangeDesignerBranchStateEmitter = new Emitter<DesignerBranchState>();
 
 CommandsRegistry.registerCommand('_designerBranches.didChangeState', (_accessor, state: DesignerBranchState) => {
 	onDidChangeDesignerBranchStateEmitter.fire(state);
 });
-
-type DesignerBranchStatus = 'synced' | 'remoteOnly' | 'localOnly' | 'problem';
-
-interface DesignerBranchItem {
-	readonly name: string;
-	readonly path: readonly string[];
-	readonly status: DesignerBranchStatus;
-	readonly isCurrent: boolean;
-	readonly isDefault: boolean;
-	readonly cloudProblem?: DesignerCloudProblem;
-}
-
-interface DesignerCloudProblem {
-	readonly message: string;
-}
-
-interface DesignerBranchTreeNode {
-	readonly name: string;
-	readonly path: readonly string[];
-	readonly branch?: DesignerBranchItem;
-	readonly children: readonly DesignerBranchTreeNode[];
-}
-
-interface DesignerBranchState {
-	readonly projectName: string;
-	readonly defaultBranch: string | undefined;
-	readonly currentBranch: string | undefined;
-	readonly cloudProblem?: DesignerCloudProblem;
-	readonly syncState: 'synced' | 'syncing' | 'problem';
-	readonly repositoryReady?: boolean;
-	readonly branches: readonly DesignerBranchItem[];
-	readonly tree: readonly DesignerBranchTreeNode[];
-}
-
-type DesignerSyncState = 'idle' | 'saving' | 'pushing' | 'synced' | 'blocked' | 'problem';
-
-interface DesignerSyncStatus {
-	readonly state: DesignerSyncState;
-	readonly message?: string;
-	readonly previousBranch?: string;
-	readonly targetBranch?: string;
-	readonly targetRepoPath?: string;
-	readonly agentPrompt?: string;
-}
-
-interface DesignerBranchCheckoutResult {
-	readonly state: DesignerBranchState;
-	readonly sync?: DesignerSyncStatus;
-	readonly blocked?: {
-		readonly reason: 'dirtyWorkTree' | 'worktreeBranchAlreadyUsed' | 'branchNameRequired' | 'mergeConflicts' | 'noRemote' | 'pushRejected' | 'authRequired' | 'saveFailed' | 'switchFailed' | 'unsafeHostRepository';
-		readonly message: string;
-	};
-}
-
-type DesignerRepoStatus = 'ready' | 'cloning' | 'problem';
-
-interface DesignerRepoItem {
-	readonly name: string;
-	readonly path: string;
-	readonly status: DesignerRepoStatus;
-	readonly isCurrent: boolean;
-	readonly url?: string;
-	readonly message?: string;
-}
-
-interface DesignerRepoState {
-	readonly currentRepoPath: string | undefined;
-	readonly repos: readonly DesignerRepoItem[];
-}
-
-interface DesignerRepoSwitchResult {
-	readonly state: DesignerRepoState;
-	readonly sync?: DesignerSyncStatus;
-	readonly blocked?: {
-		readonly reason: 'branchNameRequired' | 'mergeConflicts' | 'noRemote' | 'pushRejected' | 'authRequired' | 'saveFailed' | 'switchFailed' | 'unsafeHostRepository';
-		readonly message: string;
-	};
-}
-
-interface DesignerRepoRemoveResult {
-	readonly state: DesignerRepoState;
-}
 
 export class DesignerBranchSwitcher extends Disposable {
 
@@ -119,7 +38,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	private state: DesignerBranchState | undefined;
 	private repoState: DesignerRepoState | undefined;
 	private filterInput: HTMLInputElement | undefined;
-	private repoUrlInput: HTMLInputElement | undefined;
+	private repoSourceInput: HTMLInputElement | undefined;
 	private treeElement: HTMLElement | undefined;
 	private problemMessage: string | undefined;
 	private repoProblemMessage: string | undefined;
@@ -133,7 +52,9 @@ export class DesignerBranchSwitcher extends Disposable {
 	private switchingRepoPath: string | undefined;
 	private activeSyncState: DesignerSyncState | undefined;
 	private removingRepoPath: string | undefined;
-	private cloningRepoUrl: string | undefined;
+	private addingRepoSource: string | undefined;
+	private repoSourceDraft = '';
+	private pickingRepoFolder = false;
 	private projectAccessLimited = false;
 	private treeRenderDeferred = false;
 	private refreshPromise: Promise<void> | undefined;
@@ -149,7 +70,8 @@ export class DesignerBranchSwitcher extends Disposable {
 		parent: HTMLElement,
 		@ICommandService private readonly commandService: ICommandService,
 		@IDialogService private readonly dialogService: IDialogService,
-		@IWorkspaceTrustRequestService private readonly workspaceTrustRequestService: IWorkspaceTrustRequestService
+		@IWorkspaceTrustRequestService private readonly workspaceTrustRequestService: IWorkspaceTrustRequestService,
+		@IFileDialogService private readonly fileDialogService: IFileDialogService
 	) {
 		super();
 
@@ -197,9 +119,11 @@ export class DesignerBranchSwitcher extends Disposable {
 
 		if (this.dropdownMode === 'branch') {
 			this.branchFilter = '';
-			this.deferTreeRender();
 			this.installWindowListeners();
-			this.refresh({ updateRemotes: true });
+			if (!this.hasEmptyRepoList()) {
+				this.deferTreeRender();
+				this.refresh({ updateRemotes: true });
+			}
 		} else {
 			this.windowDisposables.clear();
 		}
@@ -219,7 +143,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		}
 
 		this.render();
-		this.focusRepoUrlInput();
+		this.focusRepoSourceInput();
 	}
 
 	private deferTreeRender(): void {
@@ -249,14 +173,14 @@ export class DesignerBranchSwitcher extends Disposable {
 		});
 	}
 
-	private focusRepoUrlInput(): void {
+	private focusRepoSourceInput(): void {
 		if (this.dropdownMode !== 'repo') {
 			return;
 		}
 
 		getWindow(this.container).requestAnimationFrame(() => {
-			this.repoUrlInput?.focus({ preventScroll: true });
-			this.repoUrlInput?.setSelectionRange(this.repoUrlInput.value.length, this.repoUrlInput.value.length);
+			this.repoSourceInput?.focus({ preventScroll: true });
+			this.repoSourceInput?.setSelectionRange(this.repoSourceInput.value.length, this.repoSourceInput.value.length);
 		});
 	}
 
@@ -277,7 +201,11 @@ export class DesignerBranchSwitcher extends Disposable {
 			}
 		}));
 
-		this.windowDisposables.add(addDisposableListener(targetWindow, EventType.BLUR, () => this.closeDropdown()));
+		this.windowDisposables.add(addDisposableListener(targetWindow, EventType.BLUR, () => {
+			if (!this.pickingRepoFolder) {
+				this.closeDropdown();
+			}
+		}));
 	}
 
 	private closeDropdown(): void {
@@ -340,19 +268,19 @@ export class DesignerBranchSwitcher extends Disposable {
 				this.repoRefreshPromise = undefined;
 				this.refreshingRepos = false;
 				this.render();
-				this.focusRepoUrlInput();
+				this.focusRepoSourceInput();
 			});
 	}
 
 	private async doRefreshRepos(): Promise<void> {
-		this.repoState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.getState');
+		this.repoState = await this.commandService.executeCommand<DesignerRepoState>(GetDesignerReposStateCommandId);
 		this.projectAccessLimited = false;
 	}
 
 	private async doRefresh(options: { updateRemotes?: boolean; retryDuringStartup?: boolean }): Promise<void> {
-		this.state = await this.commandService.executeCommand<DesignerBranchState>('_designerBranches.getState', { updateRemotes: options.updateRemotes === true });
+		this.state = await this.commandService.executeCommand<DesignerBranchState>(GetDesignerBranchesStateCommandId, { updateRemotes: options.updateRemotes === true });
 		this.projectAccessLimited = false;
-		if (this.state?.repositoryReady === false) {
+		if (this.state?.repositoryReady === false && !this.state.setup) {
 			this.scheduleStartupRefreshRetry(options);
 			return;
 		}
@@ -402,7 +330,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.renderDisposables.clear();
 		this.treeDisposables.clear();
 		this.filterInput = undefined;
-		this.repoUrlInput = undefined;
+		this.repoSourceInput = undefined;
 		this.treeElement = undefined;
 		this.repoButton.replaceChildren();
 		this.branchButton.replaceChildren();
@@ -410,6 +338,8 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.dropdown.replaceChildren();
 		this.dropdown.hidden = !this.dropdownMode;
 		this.updateDropdownHost();
+		this.repoButton.classList.toggle('designer-branch-switcher__repo-button--empty-cta', this.hasEmptyRepoList());
+		this.branchButton.classList.toggle('designer-branch-switcher__branch-button--empty-repo', this.hasEmptyRepoList());
 		this.repoButton.setAttribute('aria-expanded', String(this.dropdownMode === 'repo'));
 		this.branchButton.setAttribute('aria-expanded', String(this.dropdownMode === 'branch'));
 
@@ -444,6 +374,16 @@ export class DesignerBranchSwitcher extends Disposable {
 				$('.designer-branch-switcher__empty', undefined, localize('designerBranchSwitcherLoading', "Loading branches...")),
 				this.renderNewBranch()
 			);
+			return;
+		}
+
+		if (this.state?.setup) {
+			this.dropdown.append(this.renderBranchSetup(this.state.setup));
+			return;
+		}
+
+		if (this.hasEmptyRepoList()) {
+			this.dropdown.append(this.renderEmptyBranchList());
 			return;
 		}
 
@@ -510,10 +450,22 @@ export class DesignerBranchSwitcher extends Disposable {
 			this.dropdown.append(this.renderProblem(this.repoProblemMessage));
 		}
 
+		if (this.hasEmptyRepoList()) {
+			this.dropdown.append(this.renderEmptyRepoList());
+			return;
+		}
+
 		this.dropdown.append(this.renderRepoList(), this.renderAddRepo());
 	}
 
 	private renderBranchIndicatorIcon(): HTMLElement {
+		if (this.hasEmptyRepoList()) {
+			const icon = document.createElement('span');
+			icon.classList.add('codicon', 'codicon-git-branch', 'designer-branch-switcher__sync', 'designer-branch-switcher__sync--empty');
+			icon.title = localize('designerBranchSwitcherEmptyRepoBranchesUnavailable', "Branches appear after Parakit opens a repository.");
+			return icon;
+		}
+
 		const cloudProblem = this.state?.cloudProblem;
 		const syncState = this.problemMessage || this.repoProblemMessage || cloudProblem ? 'problem' : this.activeSyncState === 'saving' || this.activeSyncState === 'pushing' ? 'syncing' : this.isBusy() ? 'syncing' : this.state?.syncState ?? 'syncing';
 		const icon = document.createElement('span');
@@ -560,6 +512,14 @@ export class DesignerBranchSwitcher extends Disposable {
 			return localize('designerBranchSwitcherSavingLabel', "Saving...");
 		}
 
+		if (this.state?.setup?.reason === 'notGitRepository') {
+			return localize('designerBranchSwitcherConnectRepoLabel', "Connect repo");
+		}
+
+		if (this.hasEmptyRepoList()) {
+			return localize('designerBranchSwitcherEmptyRepoBranchLabel', "Branches");
+		}
+
 		if (this.isLoadingBranchInformation()) {
 			return localize('designerBranchSwitcherLoadingBranchInformation', "Loading branch information...");
 		}
@@ -576,7 +536,15 @@ export class DesignerBranchSwitcher extends Disposable {
 			return localize('designerRepoSwitcherCouldNotOpenRepoLabel', "Couldn’t open {0}", this.getRepoNameForPath(this.blockedRepoPath));
 		}
 
+		if (this.hasEmptyRepoList()) {
+			return localize('designerRepoSwitcherAddRepoLabel', "Add repo");
+		}
+
 		return this.repoState?.repos.find(repo => repo.isCurrent)?.name ?? this.state?.projectName ?? localize('designerBranchSwitcherProjectFallback', "Project");
+	}
+
+	private hasEmptyRepoList(): boolean {
+		return this.repoState?.repos.length === 0;
 	}
 
 	private getRepoNameForPath(repoPath: string): string {
@@ -590,7 +558,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private isLoadingBranchInformation(): boolean {
-		return this.refreshingBranches || this.state?.repositoryReady === false || (!this.state?.currentBranch && !this.state?.defaultBranch && this.state?.syncState === 'syncing');
+		return this.refreshingBranches || (this.state?.repositoryReady === false && !this.state.setup) || (!this.state?.currentBranch && !this.state?.defaultBranch && this.state?.syncState === 'syncing');
 	}
 
 	private renderProblem(message: string): HTMLElement {
@@ -714,6 +682,45 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.refreshRepos();
 	}
 
+	private renderBranchSetup(setup: DesignerBranchSetup): HTMLElement {
+		const container = $('.designer-branch-switcher__setup');
+		const message = setup.reason === 'notGitRepository'
+			? localize('designerBranchSwitcherNotGitRepository', "This folder is not connected to a remote repo yet.")
+			: localize('designerBranchSwitcherSetupRequired', "This folder needs setup before branches are available.");
+
+		container.append(
+			$('span.codicon.codicon-repo.designer-branch-switcher__setup-icon'),
+			$('span.designer-branch-switcher__setup-message', undefined, message)
+		);
+
+		const connect = document.createElement('button');
+		connect.className = 'designer-branch-switcher__setup-action designer-branch-switcher__setup-action--connect';
+		connect.type = 'button';
+		connect.textContent = localize('designerBranchSwitcherConnectRemoteRepo', "Connect to Remote Repo");
+		this.renderDisposables.add(addDisposableListener(connect, EventType.CLICK, () => this.connectCurrentFolderToRemote()));
+		container.append(connect);
+
+		return container;
+	}
+
+	private async connectCurrentFolderToRemote(): Promise<void> {
+		this.problemMessage = undefined;
+		this.render();
+
+		try {
+			const state = await this.commandService.executeCommand<DesignerBranchState>('_designerRepos.connectCurrentFolderToRemote');
+			if (state) {
+				this.updateBranchState(state);
+			} else {
+				this.refresh({ retryDuringStartup: true });
+			}
+			this.refreshRepos();
+		} catch (error) {
+			this.problemMessage = getErrorMessage(error);
+			this.render();
+		}
+	}
+
 	private renderTree(): HTMLElement {
 		const tree = $('.designer-branch-switcher__tree');
 		tree.setAttribute('role', 'menu');
@@ -771,18 +778,46 @@ export class DesignerBranchSwitcher extends Disposable {
 			list.append(this.renderRepoRow(repo));
 		}
 
-		if (this.cloningRepoUrl) {
+		if (this.addingRepoSource) {
 			const cloningRow = this.renderRepoRow({
-				name: this.getRepoNameFromUrl(this.cloningRepoUrl),
+				name: this.getRepoNameFromSource(this.addingRepoSource),
 				path: '',
 				status: 'cloning',
 				isCurrent: false,
-				url: this.cloningRepoUrl
+				url: this.addingRepoSource
 			});
 			list.append(cloningRow);
 		}
 
 		return list;
+	}
+
+	private renderEmptyRepoList(): HTMLElement {
+		return this.renderEmptyRepoState(
+			'codicon-repo',
+			localize('designerRepoSwitcherEmptyTitle', "No repos added yet"),
+			localize('designerRepoSwitcherEmptyMessage', "Add a repo to start exploring code with Parakit.")
+		);
+	}
+
+	private renderEmptyBranchList(): HTMLElement {
+		return this.renderEmptyRepoState(
+			'codicon-git-branch',
+			localize('designerBranchSwitcherEmptyRepoBranchesTitle', "Add a repo first"),
+			localize('designerBranchSwitcherEmptyRepoBranchesMessage', "Branches appear after Parakit opens a repository.")
+		);
+	}
+
+	private renderEmptyRepoState(iconClass: string, title: string, message: string): HTMLElement {
+		const container = $('.designer-branch-switcher__empty-state');
+		container.append(
+			$(`span.codicon.${iconClass}.designer-branch-switcher__empty-state-icon`),
+			$('.designer-branch-switcher__empty-title', undefined, title),
+			$('.designer-branch-switcher__empty-message', undefined, message),
+			this.renderAddRepo(true)
+		);
+
+		return container;
 	}
 
 	private renderRepoRow(repo: DesignerRepoItem): HTMLElement {
@@ -874,10 +909,10 @@ export class DesignerBranchSwitcher extends Disposable {
 		input.setAttribute('aria-label', localize('designerBranchSwitcherFilterAria', "Search branches"));
 		this.filterInput = input;
 
-			this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
-				this.branchFilter = input.value;
-				this.updateRenderedTree();
-			}));
+		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.branchFilter = input.value;
+			this.updateRenderedTree();
+		}));
 
 		wrapper.append(input);
 		return wrapper;
@@ -1001,7 +1036,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>('_designerBranches.saveAndCheckout', { branchName });
+			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>(SaveAndCheckoutDesignerBranchCommandId, { branchName });
 			if (!result) {
 				throw new Error(localize('designerBranchSwitcherSaveAndCheckoutFailed', "Branch could not be saved and switched."));
 			}
@@ -1043,7 +1078,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>('_designerBranches.checkout', { branchName, skipSave: true });
+			const result = await this.commandService.executeCommand<DesignerBranchCheckoutResult>(CheckoutDesignerBranchCommandId, { branchName, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerBranchSwitcherCheckoutFailed', "Branch could not be switched."));
 			}
@@ -1071,14 +1106,14 @@ export class DesignerBranchSwitcher extends Disposable {
 
 	private async switchRepo(repoPath: string): Promise<void> {
 		this.switchingRepoPath = repoPath;
-		this.activeSyncState = 'saving';
+		this.activeSyncState = undefined;
 		this.repoProblemMessage = undefined;
 		this.blockedRepoPath = undefined;
 		this.recoveryAgentPrompt = undefined;
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>('_designerRepos.saveAndSwitch', { repoPath });
+			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SwitchDesignerRepoCommandId, { repoPath, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerRepoSwitcherSwitchFailed', "Repo could not be opened."));
 			}
@@ -1117,7 +1152,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		this.closeDropdown();
 
 		try {
-			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>('_designerRepos.switch', { repoPath, skipSave: true });
+			const result = await this.commandService.executeCommand<DesignerRepoSwitchResult>(SwitchDesignerRepoCommandId, { repoPath, skipSave: true });
 			if (!result) {
 				throw new Error(localize('designerRepoSwitcherSwitchFailed', "Repo could not be opened."));
 			}
@@ -1204,7 +1239,7 @@ export class DesignerBranchSwitcher extends Disposable {
 		} finally {
 			this.removingRepoPath = undefined;
 			this.render();
-			this.focusRepoUrlInput();
+			this.focusRepoSourceInput();
 		}
 	}
 
@@ -1289,7 +1324,7 @@ export class DesignerBranchSwitcher extends Disposable {
 	}
 
 	private isBusy(): boolean {
-		return this.refreshingBranches || this.refreshingRepos || !!this.switchingBranchName || !!this.switchingRepoPath || !!this.removingRepoPath || !!this.cloningRepoUrl;
+		return this.refreshingBranches || this.refreshingRepos || !!this.switchingBranchName || !!this.switchingRepoPath || !!this.removingRepoPath || !!this.addingRepoSource || this.pickingRepoFolder;
 	}
 
 	private getBranchName(input: string): string {
@@ -1312,16 +1347,29 @@ export class DesignerBranchSwitcher extends Disposable {
 		return `design/${branchName.replace(/^design\//, '')}`;
 	}
 
-	private renderAddRepo(): HTMLElement {
+	private renderAddRepo(inEmptyState = false): HTMLElement {
 		const form = document.createElement('form');
 		form.className = 'designer-branch-switcher__repo-add-form';
+		form.classList.toggle('designer-branch-switcher__repo-add-form--empty-state', inEmptyState);
+
+		const chooseFolder = document.createElement('button');
+		chooseFolder.className = 'designer-branch-switcher__repo-source-folder';
+		chooseFolder.type = 'button';
+		chooseFolder.title = localize('designerRepoSwitcherOpenLocalFolderTitle', "Open Local Folder");
+		chooseFolder.setAttribute('aria-label', localize('designerRepoSwitcherOpenLocalFolderAria', "Open Local Folder"));
+		chooseFolder.disabled = this.isBusy();
+		chooseFolder.append(
+			$('span.codicon.codicon-folder-opened'),
+			$('span', undefined, localize('designerRepoSwitcherOpenLocalFolder', "Open local folder"))
+		);
 
 		const input = document.createElement('input');
-		input.className = 'designer-branch-switcher__repo-url-input';
+		input.className = 'designer-branch-switcher__repo-source-input';
 		input.type = 'text';
-		input.placeholder = localize('designerRepoSwitcherUrlPlaceholder', "Paste repo URL");
-		input.setAttribute('aria-label', localize('designerRepoSwitcherUrlAria', "Repository URL"));
-		this.repoUrlInput = input;
+		input.value = this.repoSourceDraft;
+		input.placeholder = localize('designerRepoSwitcherSourcePlaceholder', "Paste repo URL");
+		input.setAttribute('aria-label', localize('designerRepoSwitcherSourceAria', "Repo URL"));
+		this.repoSourceInput = input;
 
 		const add = document.createElement('button');
 		add.className = 'designer-branch-switcher__repo-add';
@@ -1329,49 +1377,103 @@ export class DesignerBranchSwitcher extends Disposable {
 		add.disabled = true;
 		add.append(
 			$('span.codicon.codicon-add'),
-			$('span', undefined, localize('designerRepoSwitcherAdd', "Add"))
+			$('span', undefined, localize('designerRepoSwitcherAdd', "Add repo"))
 		);
 
-		form.append(input, add);
+		const urlRow = $('.designer-branch-switcher__repo-add-url-row');
+		urlRow.append(input, add);
+		form.append(urlRow, chooseFolder);
 
 		const updateAddButtonState = () => {
-			add.disabled = !input.value.trim() || !!this.cloningRepoUrl;
+			add.disabled = !input.value.trim() || !!this.addingRepoSource || this.pickingRepoFolder;
 		};
 
-		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, updateAddButtonState));
+		this.renderDisposables.add(addDisposableListener(chooseFolder, EventType.CLICK, () => this.pickRepoSourceFolder()));
+		this.renderDisposables.add(addDisposableListener(input, EventType.INPUT, () => {
+			this.repoSourceDraft = input.value;
+			if (this.repoProblemMessage) {
+				this.repoProblemMessage = undefined;
+				this.render();
+				this.focusRepoSourceInput();
+				return;
+			}
+
+			updateAddButtonState();
+		}));
 		updateAddButtonState();
 
 		this.renderDisposables.add(addDisposableListener(form, EventType.SUBMIT, event => {
 			event.preventDefault();
-			const repoUrl = input.value.trim();
-			if (!repoUrl || add.disabled) {
+			const source = input.value.trim();
+			if (!source || add.disabled) {
 				return;
 			}
-			this.cloneRepo(repoUrl);
+			this.addRepoSource(source);
 		}));
 
 		return form;
 	}
 
-	private async cloneRepo(url: string): Promise<void> {
-		this.cloningRepoUrl = url;
+	private async pickRepoSourceFolder(): Promise<void> {
+		this.pickingRepoFolder = true;
+		let selectedPath: string | undefined;
+		let problem: string | undefined;
+
+		try {
+			const folders = await this.fileDialogService.showOpenDialog({
+				canSelectFiles: false,
+				canSelectFolders: true,
+				canSelectMany: false,
+				openLabel: localize('designerRepoSwitcherChooseFolderOpenLabel', "Choose Folder"),
+				title: localize('designerRepoSwitcherChooseFolderTitle', "Choose Local Folder")
+			});
+			const folder = folders?.[0];
+			if (folder) {
+				selectedPath = folder.fsPath;
+			}
+		} catch (error) {
+			problem = getErrorMessage(error);
+		} finally {
+			this.pickingRepoFolder = false;
+		}
+
+		if (problem) {
+			this.repoProblemMessage = problem;
+			this.render();
+			this.focusRepoSourceInput();
+			return;
+		}
+
+		if (selectedPath) {
+			this.repoProblemMessage = undefined;
+			this.addRepoSource(selectedPath);
+			return;
+		}
+
+		this.focusRepoSourceInput();
+	}
+
+	private async addRepoSource(source: string): Promise<void> {
+		this.addingRepoSource = source;
+		this.repoSourceDraft = source;
 		this.repoProblemMessage = undefined;
 		this.render();
 
 		try {
-			const cloneState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.clone', { url });
-			this.repoState = cloneState ? this.mergeRepoState(this.repoState, cloneState) : cloneState;
+			const nextState = await this.commandService.executeCommand<DesignerRepoState>('_designerRepos.addSource', { source });
+			this.repoState = nextState ? this.mergeRepoState(this.repoState, nextState) : nextState;
+			this.repoSourceDraft = '';
 		} catch (error) {
 			this.repoProblemMessage = getErrorMessage(error);
 		} finally {
-			this.cloningRepoUrl = undefined;
+			this.addingRepoSource = undefined;
 			this.render();
-			this.focusRepoUrlInput();
+			this.focusRepoSourceInput();
 		}
 	}
 
-	private getRepoNameFromUrl(url: string): string {
-		const trimmed = url.trim().replace(/\/+$/, '').replace(/\.git$/, '');
+	private getRepoNameFromSource(source: string): string {
+		const trimmed = source.trim().replace(/[/\\]+$/, '').replace(/\.git$/, '');
 		const lastSegment = trimmed.split(/[/:]/).filter(Boolean).pop();
 		if (!lastSegment) {
 			return localize('designerRepoSwitcherUnknownRepo', "New repo");

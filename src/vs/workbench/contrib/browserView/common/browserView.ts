@@ -38,6 +38,7 @@ import {
 	IBrowserViewVisibilityEvent,
 	IBrowserViewCertificateError,
 		IElementData,
+		IBrowserViewInspectorPanelPayload,
 		IBrowserViewOwner,
 		IBrowserViewRect,
 		BrowserViewKind,
@@ -142,6 +143,7 @@ export interface IBrowserEditorViewState {
 	readonly title?: string;
 	readonly favicon?: string;
 	readonly isSessionAppPreview?: boolean;
+	readonly isSessionAppPreviewAuth?: boolean;
 
 	/**
 	 * When true, indicates that this browser tab was opened via the localhost
@@ -306,6 +308,8 @@ export interface IBrowserViewModel extends IDisposable {
 	resetZoom(): Promise<void>;
 	getConsoleLogs(): Promise<string>;
 	toggleElementSelection(enabled?: boolean): Promise<void>;
+	showElementInspectorPanel(payload: IBrowserViewInspectorPanelPayload): Promise<void>;
+	hideElementInspectorPanel(): Promise<void>;
 	toggleAreaSelection(enabled?: boolean): Promise<void>;
 	setDevice(device: IBrowserDeviceProfile | undefined): Promise<void>;
 }
@@ -717,6 +721,14 @@ export class BrowserViewModel extends Disposable implements IBrowserViewModel {
 
 	async toggleElementSelection(enabled?: boolean): Promise<void> {
 		return this.browserViewService.toggleElementSelection(this.id, enabled);
+	}
+
+	async showElementInspectorPanel(payload: IBrowserViewInspectorPanelPayload): Promise<void> {
+		return this.browserViewService.showElementInspectorPanel(this.id, payload);
+	}
+
+	async hideElementInspectorPanel(): Promise<void> {
+		return this.browserViewService.hideElementInspectorPanel(this.id);
 	}
 
 	async toggleAreaSelection(enabled?: boolean): Promise<void> {

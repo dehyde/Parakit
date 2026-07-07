@@ -26,7 +26,7 @@ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContaine
 import { IViewContainersRegistry, IViewsRegistry, ViewContainer, ViewContainerLocation, Extensions as ViewExtensions } from '../../../common/views.js';
 import { IViewDescriptorService } from '../../../common/views.js';
 import { IChatWidgetService } from '../../chat/browser/chat.js';
-import { BROWSER_DESIGN_ELEMENT_CONTAINER_ID, BROWSER_DESIGN_ELEMENT_VIEW_ID, compactDesignElementDomPath, getDesignElementAttributeRows, IBrowserDesignElementService, IDesignElementProperty, IDesignElementPropertyGroup, IDesignElementSelection } from '../common/browserDesignElementService.js';
+import { BROWSER_DESIGN_ELEMENT_CONTAINER_ID, BROWSER_DESIGN_ELEMENT_SELECTED_CONTEXT, BROWSER_DESIGN_ELEMENT_VIEW_ID, compactDesignElementDomPath, getDesignElementAttributeRows, IBrowserDesignElementService, IDesignElementProperty, IDesignElementPropertyGroup, IDesignElementSelection } from '../common/browserDesignElementService.js';
 
 class BrowserDesignElementViewPane extends ViewPane {
 	private readonly renderStore = this._register(new DisposableStore());
@@ -228,7 +228,7 @@ const designElementContainer: ViewContainer = viewContainersRegistry.registerVie
 	icon: ThemeIcon.fromId(Codicon.inspect.id),
 	ctorDescriptor: new SyncDescriptor(ViewPaneContainer, [BROWSER_DESIGN_ELEMENT_CONTAINER_ID, { mergeViewWithContainerWhenSingleView: true }]),
 	storageId: BROWSER_DESIGN_ELEMENT_CONTAINER_ID,
-	hideIfEmpty: false,
+	hideIfEmpty: true,
 	order: 1000,
 }, ViewContainerLocation.AuxiliaryBar, { doNotRegisterOpenCommand: true });
 
@@ -239,6 +239,7 @@ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([{
 	containerTitle: designElementContainer.title.value,
 	singleViewPaneContainerTitle: localize('browserDesignElementViewName', "Design element"),
 	ctorDescriptor: new SyncDescriptor(BrowserDesignElementViewPane),
+	when: BROWSER_DESIGN_ELEMENT_SELECTED_CONTEXT,
 	canToggleVisibility: true,
 	canMoveView: true,
 	hideByDefault: false,

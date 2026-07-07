@@ -5,11 +5,18 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
-import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldRestartWorkbenchAppPreviewAfterHealthFailures, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
-import { createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
+import { adaptWorkbenchAppPreviewUrlToPort, applyWorkbenchAppPreviewDevPort, canStartWorkbenchAppPreviewServerWithoutInstall, classifyWorkbenchAppPreviewTerminalFailure, getWorkbenchAppPreviewClaudeReconciliationCommands, getWorkbenchAppPreviewDevConfigFixedPort, getWorkbenchAppPreviewHealthFetchMode, getWorkbenchAppPreviewServerStateAfterCommandExit, getWorkbenchAppPreviewServerStateAfterHealthTimeout, getWorkbenchAppPreviewStartupPageKey, hasWorkbenchAppPreviewPortTemplate, isWorkbenchAppPreviewManagedLocalUrl, isWorkbenchAppPreviewPathUnderRoot, isWorkbenchAppPreviewPortConflict, isWorkbenchAppPreviewUrlForBranch, normalizeWorkbenchAppPreviewLoopbackUrl, observeWorkbenchAppPreviewBranch, parseWorkbenchAppPreviewEnv, parseWorkbenchAppPreviewRsbuildConfig, resolveWorkbenchAppPreviewAdvertisedNavigationUrl, resolveWorkbenchAppPreviewAdvertisedUrl, resolveWorkbenchAppPreviewDevServerTarget, resolveWorkbenchAppPreviewDiscoveredPortReconciliation, resolveWorkbenchAppPreviewHomeTargets, resolveWorkbenchAppPreviewInferredStartupUrl, resolveWorkbenchAppPreviewPreferredUrl, resolveWorkbenchAppPreviewStaticHtmlConfig, resolveWorkbenchAppPreviewUrlOnOrigin, selectWorkbenchAppPreviewStaticHtmlFile, shouldFallbackFromWorkbenchAppPreviewDevConfig, shouldIgnoreWorkbenchAppPreviewLoadEvent, shouldRestartWorkbenchAppPreviewAfterHealthFailures, shouldRestartWorkbenchAppPreviewAfterLoadError, shouldShowWorkbenchAppPreviewLoadErrorOverlay, shouldShowWorkbenchAppPreviewSetupBeforeServerStart, resolveWorkbenchAppPreviewDevConfig, resolveWorkbenchAppPreviewHeuristicDevConfig, resolveWorkbenchAppPreviewUrl, shouldForceNavigateWorkbenchAppPreview, shouldNavigateWorkbenchAppPreview, shouldRecoverWorkbenchAppPreviewLoadError } from '../../common/appPreviewConfig.js';
+import { APP_PREVIEW_STARTUP_ANIMATION_SRC, createWorkbenchAppPreviewStartupDataUrl, getWorkbenchAppPreviewStartupTitle, WORKBENCH_APP_PREVIEW_STARTUP_HEALTH_TIMEOUT } from '../../common/appPreviewStartupPage.js';
+import { getSerializableBrowserEditorInputData } from '../../common/browserEditorInput.js';
 
 function decodeDataUrlHtml(dataUrl: string): string {
 	const marker = 'data:text/html;base64,';
+	assert.ok(dataUrl.startsWith(marker));
+	return atob(dataUrl.slice(marker.length));
+}
+
+function decodeDataUrlSvg(dataUrl: string): string {
+	const marker = 'data:image/svg+xml;base64,';
 	assert.ok(dataUrl.startsWith(marker));
 	return atob(dataUrl.slice(marker.length));
 }
@@ -84,7 +91,7 @@ suite('Workbench App Preview', () => {
 			runningServerUrl: 'http://127.0.0.1:15761/',
 			discoveredUrl: 'http://127.0.0.1:15761/',
 			allowRunningServerFallback: false,
-		}), undefined);
+		}), 'http://127.0.0.1:15761/');
 	});
 
 	test('preferred URL keeps advertised local canonical URL when fallback is suppressed', () => {
@@ -93,6 +100,29 @@ suite('Workbench App Preview', () => {
 			discoveredUrl: 'https://local.preview.example.test:15761/',
 			allowRunningServerFallback: false,
 		}), 'https://local.preview.example.test:15761/');
+	});
+
+	test('server advertisements keep framework preview URLs as the navigated URL', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: 'https://local.preview.example.test:3001/',
+			previewUrl: 'https://external-shell.example.test/build/app?previewMode=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+		}), 'https://external-shell.example.test/build/app?previewMode=dev&remote=https://local.preview.example.test:3001/assets-no-cache/remoteEntry.js');
+
+		assert.strictEqual(resolveWorkbenchAppPreviewAdvertisedNavigationUrl({
+			advertisedUrl: 'https://local.preview.example.test:3001/',
+			previewSource: 'server',
+		}), 'https://local.preview.example.test:3001/');
+	});
+
+	test('preferred URL keeps configured default over duplicate running server fallback', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewPreferredUrl({
+			localDefaultOverride: 'https://local.preview.example.test:3001/app/projects/abc',
+			repoDefaultUrl: 'https://local.preview.example.test:3001/',
+			runningServerUrl: 'http://127.0.0.1:15761/',
+			discoveredUrl: 'http://127.0.0.1:15761/',
+			allowRunningServerFallback: false,
+		}), 'https://local.preview.example.test:3001/app/projects/abc');
 	});
 
 	test('home targets use local overrides before canonical config', () => {
@@ -345,6 +375,51 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(getWorkbenchAppPreviewStartupTitle('healthChecking', undefined), 'Starting preview of this workspace');
 	});
 
+	test('startup title names the empty repo state', () => {
+		assert.strictEqual(getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined), 'Add a repo to preview your app');
+	});
+
+	test('startup title names dependency install states', () => {
+		assert.deepStrictEqual([
+			getWorkbenchAppPreviewStartupTitle('installingDependencies', 'main'),
+			getWorkbenchAppPreviewStartupTitle('missingDependencies', undefined),
+		], [
+			'Installing dependencies for main',
+			'Preview dependencies need attention',
+		]);
+	});
+
+	test('startup page renders empty repo add actions', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'emptyRepo',
+			title: getWorkbenchAppPreviewStartupTitle('emptyRepo', undefined),
+			message: 'Parakit needs a repo before it can show an app preview.',
+			actions: ['pasteRepoUrl', 'openLocalFolder'],
+		}));
+
+		assert.match(html, /<div class="icon">\+<\/div>/);
+		assert.match(html, /Paste repo URL/);
+		assert.match(html, /data-action="pasteRepoUrl"/);
+		assert.match(html, /Open local folder/);
+		assert.match(html, /data-action="openLocalFolder"/);
+		assert.doesNotMatch(html, /Copy context for agent/);
+	});
+
+	test('startup page renders dependency install actions after install failure', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'missingDependencies',
+			title: getWorkbenchAppPreviewStartupTitle('missingDependencies', undefined),
+			message: 'Install failed.',
+			command: 'yarn install',
+			actions: ['retry', 'restart', 'logs'],
+		}));
+
+		assert.match(html, /Preview dependencies need attention/);
+		assert.match(html, /data-action="retry"/);
+		assert.match(html, /data-action="restart"/);
+		assert.match(html, /data-action="logs"/);
+	});
+
 	test('startup page keeps preview details collapsed behind show more info', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
@@ -362,14 +437,156 @@ suite('Workbench App Preview', () => {
 		assert.match(html, /<p class="caption">Branch: feature\/cart\nPrevious branch: main\nPort: 3001\nHealth check: http:\/\/127\.0\.0\.1:3001\/health\nPreview URL: http:\/\/127\.0\.0\.1:3001\/<\/p>/);
 	});
 
-	test('startup page renders the startup animation one and a half times larger', () => {
+	test('startup page renders current stage marker as an animated spinner', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'healthChecking',
+			title: 'Starting preview of feature/cart',
+			message: 'Waiting for app response.',
+			stages: [{ label: 'Wait for app response', status: 'current' }],
+		}));
+
+		assert.match(html, /@keyframes app-preview-stage-spinner/);
+		assert.match(html, /<span class="stage-spinner" aria-hidden="true"><\/span>/);
+		assert.match(html, /\.stage-spinner \{[^}]*animation: app-preview-stage-spinner 900ms linear infinite;/);
+		assert.doesNotMatch(html, /<span class="stage-icon">&bull;<\/span>/);
+	});
+
+	test('startup page renders the startup animation in an unclipped frame', () => {
 		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
 			phase: 'healthChecking',
 			title: 'Starting preview of feature/cart',
 			message: 'Waiting for app response.',
 		}));
 
-		assert.match(html, /\.startup-animation \{ width: 54px; height: 54px;/);
+		assert.match(html, /\.startup-animation-frame \{ width: 54px; height: 76px; display: grid; place-items: center; flex: 0 0 auto; overflow: visible; \}/);
+		assert.match(html, /\.startup-animation \{ width: 54px; height: 76px; object-fit: contain; overflow: visible; display: block; \}/);
+		assert.match(html, /<span class="startup-animation-frame"><img class="startup-animation"/);
+	});
+
+	test('startup animation svg keeps stroke padding inside the image viewport', () => {
+		const svg = decodeDataUrlSvg(APP_PREVIEW_STARTUP_ANIMATION_SRC);
+
+		assert.match(svg, /<svg width="99" height="167" viewBox="0 0 99 167"/);
+		assert.match(svg, /<g id="parakit_animation_white" transform="translate\(4 4\)">/);
+	});
+
+	test('startup page uses workbench typography and pure blue accent styling', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'slow',
+			title: 'Preview is taking longer than expected',
+			message: 'The server is still starting.',
+			actions: ['copy'],
+		}));
+
+		assert.match(html, /--app-preview-accent: #0000ff;/);
+		assert.match(html, /font-family: "IBM Plex Mono", monospace;/);
+		assert.match(html, /\.stage-current \.stage-icon \{ color: var\(--app-preview-accent\); \}/);
+		assert.match(html, /button \{ appearance: none; border: 0; border-radius: 4px; background: var\(--app-preview-accent\); color: #ffffff;/);
+	});
+
+	test('startup page always renders with the dark preview background', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'installingDependencies',
+			title: 'Installing dependencies for feature/cart',
+			message: 'Installing dependencies before starting the preview server.',
+		}));
+
+		assert.match(html, /:root \{ color-scheme: dark;[^}]*--app-preview-background: #1e1e1e;/);
+		assert.doesNotMatch(html, /color-scheme: light dark/);
+		assert.doesNotMatch(html, /--app-preview-background: #ffffff/);
+		assert.doesNotMatch(html, /prefers-color-scheme/);
+	});
+
+	test('startup install page sets expectations for fresh dependency installs', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'installingDependencies',
+			title: 'Installing dependencies for feature/cart',
+			message: 'Installing dependencies before starting the preview server. A fresh install can take a few minutes.',
+		}));
+
+		assert.match(html, /fresh install can take a few minutes/);
+	});
+
+	test('startup page hides agent context copy before the slow state', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'healthChecking',
+			title: 'Starting preview of feature/cart',
+			message: 'Waiting for app response.',
+			actions: ['copy'],
+		}));
+
+		assert.doesNotMatch(html, /Copy context for agent/);
+		assert.doesNotMatch(html, /data-action="copy"/);
+	});
+
+	test('startup page shows agent context copy in the slow state', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'slow',
+			title: 'Preview is taking longer than expected',
+			message: 'The server is still starting.',
+			actions: ['copy'],
+		}));
+
+		assert.match(html, /Copy context for agent/);
+		assert.match(html, /data-action="copy"/);
+	});
+
+	test('startup setup page renders configure action without retry or restart', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'setup',
+			title: getWorkbenchAppPreviewStartupTitle('setup', 'feature/cart'),
+			message: 'Set the URL that opens by default for this branch.',
+			actions: ['configure'],
+		}));
+
+		assert.match(html, /Set default URL/);
+		assert.doesNotMatch(html, /Configure URL/);
+		assert.match(html, /data-action="configure"/);
+		assert.doesNotMatch(html, /data-action="retry"/);
+		assert.doesNotMatch(html, /data-action="restart"/);
+	});
+
+	test('startup setup page renders as a static configuration prompt', () => {
+		const html = decodeDataUrlHtml(createWorkbenchAppPreviewStartupDataUrl({
+			phase: 'setup',
+			title: getWorkbenchAppPreviewStartupTitle('setup', 'feature/cart'),
+			message: 'Set the URL that opens by default for this branch.',
+			stages: [{ label: 'Set default URL', status: 'current', startedAt: 12345 }],
+			actions: ['configure'],
+		}, APP_PREVIEW_STARTUP_ANIMATION_SRC));
+
+		assert.match(html, /Set the URL that opens by default for this branch\./);
+		assert.doesNotMatch(html, /startup-animation/);
+		assert.doesNotMatch(html, /stage-spinner/);
+		assert.doesNotMatch(html, /stage-elapsed/);
+		assert.doesNotMatch(html, /app-preview-stage-spinner/);
+		assert.doesNotMatch(html, /setInterval\(updateTimers, 1000\)/);
+		assert.doesNotMatch(html, /<ol class="stages">/);
+		assert.doesNotMatch(html, /<div class="icon">/);
+		assert.match(html, /Set default URL/);
+		assert.doesNotMatch(html, /Configure URL/);
+	});
+
+	test('transient App Preview auth tabs are not serialized', () => {
+		assert.strictEqual(getSerializableBrowserEditorInputData({
+			id: 'auth-tab',
+			url: 'https://login.example.com/oauth',
+			title: 'Sign in',
+			isSessionAppPreviewAuth: true,
+		}), undefined);
+	});
+
+	test('serialized App Preview tabs do not restore runtime URLs', () => {
+		assert.deepStrictEqual(getSerializableBrowserEditorInputData({
+			id: 'app-preview',
+			url: 'https://local.preview.example.test:3001/app/projects/123',
+			title: 'Project details',
+			favicon: 'data:image/svg+xml;base64,abc',
+			isSessionAppPreview: true,
+		}), {
+			id: 'app-preview',
+			isSessionAppPreview: true,
+		});
 	});
 
 	test('startup health timeout waits two and a half minutes before showing the slow state', () => {
@@ -436,6 +653,148 @@ suite('Workbench App Preview', () => {
 			errorCode: -3,
 			serverUrl: 'https://local.preview.example.test:3001/',
 		}), false);
+	});
+
+	test('preview load recovery waits instead of restarting while managed server process is alive', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: true,
+		}), false);
+	});
+
+	test('preview load recovery can restart after the managed server process exits', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: false,
+		}), true);
+	});
+
+	test('preview load recovery can restart after managed startup has failed even if the terminal is still alive', () => {
+		assert.strictEqual(shouldRestartWorkbenchAppPreviewAfterLoadError({
+			recoverableLoadError: shouldRecoverWorkbenchAppPreviewLoadError({
+				errorUrl: 'https://local.preview.example.test:3001/app/projects/abc',
+				errorCode: -102,
+				serverUrl: 'https://local.preview.example.test:3001/',
+			}),
+			serverProcessAlive: true,
+			serverState: 'failed',
+		}), true);
+	});
+
+	test('preview server command exit before health marks startup failed', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+		}), 'failed');
+	});
+
+	test('preview server command exit after health marks server stopped', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterCommandExit({
+			serverState: 'running',
+			serverHealth: 'healthy',
+		}), 'stopped');
+	});
+
+	test('preview startup health timeout fails when command is no longer active', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+			serverTerminalExited: false,
+			serverCommandActive: false,
+		}), 'failed');
+	});
+
+	test('preview startup health timeout can keep waiting when command activity is unknown', () => {
+		assert.strictEqual(getWorkbenchAppPreviewServerStateAfterHealthTimeout({
+			serverState: 'running',
+			serverHealth: 'unhealthy',
+			serverTerminalExited: false,
+			serverCommandActive: undefined,
+		}), undefined);
+	});
+
+	test('unresolved preview configuration shows setup before starting a server', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: undefined,
+			needsConfigurationPrompt: true,
+		}), true);
+	});
+
+	test('unresolved preview configuration allows server start when dependencies are ready', () => {
+		const policy = {
+			configuredUrl: undefined,
+			needsConfigurationPrompt: true,
+			canStartServerWithoutInstall: true,
+		};
+
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy), false);
+	});
+
+	test('unresolved preview configuration allows server start before installing dependencies', () => {
+		const policy = {
+			configuredUrl: undefined,
+			inferredStartupUrl: undefined,
+			needsConfigurationPrompt: true,
+			hasRunnableServerConfig: true,
+			canStartServerWithoutInstall: false,
+		};
+
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart(policy), false);
+	});
+
+	test('unresolved preview configuration allows server start with inferred startup URL', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: undefined,
+			inferredStartupUrl: 'https://local.preview.example.test:3001/app',
+			needsConfigurationPrompt: true,
+			canStartServerWithoutInstall: false,
+		}), false);
+	});
+
+	test('resolved preview configuration does not block server start', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewSetupBeforeServerStart({
+			configuredUrl: 'https://local.preview.example.test:3001/',
+			needsConfigurationPrompt: true,
+		}), false);
+	});
+
+	test('inferred startup URL prefers current branch verified URL adapted to assigned port', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewInferredStartupUrl({
+			port: 3002,
+			branchRuntime: {
+				lastSuccessfulUrl: 'https://local.preview.example.test:3001/branch-route',
+				lastSuccessfulAt: 200,
+			},
+			repoRuntimes: [{
+				lastSuccessfulUrl: 'https://local.preview.example.test:3003/repo-route',
+				lastSuccessfulAt: 300,
+			}],
+		}), 'https://local.preview.example.test:3002/branch-route');
+	});
+
+	test('inferred startup URL falls back to newest verified repo URL adapted to assigned port', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewInferredStartupUrl({
+			port: 3002,
+			branchRuntime: {},
+			repoRuntimes: [
+				{
+					lastSuccessfulUrl: 'https://local.preview.example.test:3001/older',
+					lastSuccessfulAt: 100,
+				},
+				{
+					lastSuccessfulUrl: 'https://local.preview.example.test:3003/newer',
+					lastSuccessfulAt: 300,
+				},
+			],
+		}), 'https://local.preview.example.test:3002/newer');
 	});
 
 	test('advertised preview URLs preserve route on the active preview origin', () => {
@@ -544,9 +903,58 @@ suite('Workbench App Preview', () => {
 			healthPath: '/ready',
 		}, 4321), {
 			command: 'npm run dev',
-			env: { PORT: '4321' },
+			env: { BROWSER: 'none', PORT: '4321' },
 			url: 'http://127.0.0.1:4321/',
 			healthUrl: 'http://127.0.0.1:4321/ready',
+		});
+	});
+
+	test('dev config supports absolute health URL separate from preview URL', () => {
+		const resolvedConfig = resolveWorkbenchAppPreviewDevConfig({
+			default: {
+				command: 'npm run dev',
+				portEnv: 'NODE_PORT',
+				url: 'https://local.preview.example.test:${PORT}/app/projects',
+				healthUrl: 'https://local.preview.example.test:${PORT}/healthz',
+			}
+		}, undefined);
+
+		assert.ok(resolvedConfig);
+		assert.deepStrictEqual(applyWorkbenchAppPreviewDevPort(resolvedConfig, 3001), {
+			command: 'npm run dev',
+			env: { BROWSER: 'none', NODE_PORT: '3001' },
+			url: 'https://local.preview.example.test:3001/app/projects',
+			healthUrl: 'https://local.preview.example.test:3001/healthz',
+		});
+	});
+
+	test('resolved dev server target separates process, server, health, and preview URL', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDevServerTarget({
+			command: 'pnpm run start',
+			portEnv: 'NODE_PORT',
+			url: 'https://local.preview.example.test:3001/',
+			healthUrl: 'https://local.preview.example.test:3001/ready',
+			fixedPort: 3001,
+			previewUrl: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+			allowSelfSignedLocalHttps: true,
+		}, 4912, '/workspaces/example'), {
+			process: {
+				command: 'pnpm run start',
+				cwd: '/workspaces/example',
+				env: { BROWSER: 'none', NODE_PORT: '3001' },
+			},
+			port: { mode: 'fixed', value: 3001, env: 'NODE_PORT' },
+			server: {
+				url: 'https://local.preview.example.test:3001/',
+				origin: 'https://local.preview.example.test:3001',
+				allowSelfSignedLocalHttps: true,
+			},
+			health: { url: 'https://local.preview.example.test:3001/ready' },
+			preview: {
+				url: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+				source: 'frameworkOpen',
+			},
 		});
 	});
 
@@ -562,7 +970,7 @@ suite('Workbench App Preview', () => {
 		assert.ok(resolvedConfig);
 		assert.deepStrictEqual(applyWorkbenchAppPreviewDevPort(resolvedConfig, 4321), {
 			command: 'npm run dev',
-			env: {},
+			env: { BROWSER: 'none' },
 			url: 'https://local.preview.example.test:3001/',
 			healthUrl: 'https://local.preview.example.test:3001/',
 		});
@@ -572,11 +980,78 @@ suite('Workbench App Preview', () => {
 		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
 			start: 'RSBUILD_ENV=dev rsbuild dev',
 		}, 'https://local.preview.example.test:${PORT}/app/projects/abc'), {
-			command: 'npm run start',
+			command: 'npm run start -- --port ${PORT}',
 			portEnv: 'PORT',
 			url: 'https://local.preview.example.test:${PORT}/app/projects/abc',
 			healthPath: '/',
 		});
+	});
+
+	test('heuristic dev config passes assigned port to rsbuild scripts', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'rsbuild dev',
+		}), {
+			command: 'npm run start -- --port ${PORT}',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+		});
+	});
+
+	test('heuristic dev config prefers headless start:ci over start', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'rsbuild dev --open',
+			'start:ci': 'rsbuild dev',
+		}, undefined, undefined, {
+			scriptCommandPrefix: 'pnpm run',
+			installCommand: 'pnpm install',
+			dependencyReadiness: 'missing',
+		}), {
+			command: 'pnpm run start:ci -- --port ${PORT}',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			installCommand: 'pnpm install',
+			dependencyReadiness: 'missing',
+		});
+	});
+
+	test('heuristic dev config uses static Rsbuild server config when available', () => {
+		const rsbuildConfig = parseWorkbenchAppPreviewRsbuildConfig(`
+			export default {
+				server: {
+					host: 'local.preview.example.test',
+					port: Number(process.env.NODE_PORT) || 3001,
+					https: {
+						key: './.cert/key.pem',
+						cert: './.cert/cert.pem',
+					},
+					open: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+				},
+			};
+		`);
+
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			'start:ci': 'rsbuild dev',
+		}, undefined, undefined, {
+			scriptCommandPrefix: 'pnpm run',
+		}, rsbuildConfig), {
+			command: 'pnpm run start:ci',
+			portEnv: 'NODE_PORT',
+			url: 'https://local.preview.example.test:3001/',
+			healthPath: '/',
+			fixedPort: 3001,
+			previewUrl: 'https://external-shell.example.test/build/app?remote=https://local.preview.example.test:3001/remoteEntry.js',
+			previewSource: 'frameworkOpen',
+			allowSelfSignedLocalHttps: true,
+		});
+	});
+
+	test('heuristic dev config declines dynamic Rsbuild server config', () => {
+		assert.strictEqual(parseWorkbenchAppPreviewRsbuildConfig(`
+			const host = computeHost();
+			export default { server: { host } };
+		`), undefined);
 	});
 
 	test('heuristic dev config uses fixed app port from repo environment', () => {
@@ -592,13 +1067,56 @@ suite('Workbench App Preview', () => {
 		}, undefined, env);
 
 		assert.deepStrictEqual(config, {
-			command: 'npm run start',
+			command: 'npm run start -- --port ${PORT}',
 			portEnv: 'PORT',
 			url: 'https://local.preview.example.test:3001/',
 			healthPath: '/',
 			fixedPort: 3001,
 		});
 		assert.strictEqual(config ? getWorkbenchAppPreviewDevConfigFixedPort(config) : undefined, 3001);
+	});
+
+	test('heuristic dev config infers fixed app port from startup script port flag', () => {
+		const config = resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'vite --host 127.0.0.1 --port 3000',
+		});
+
+		assert.deepStrictEqual(config, {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			fixedPort: 3000,
+		});
+		assert.deepStrictEqual(config ? applyWorkbenchAppPreviewDevPort(config, getWorkbenchAppPreviewDevConfigFixedPort(config) ?? 4321) : undefined, {
+			command: 'npm run start',
+			env: { BROWSER: 'none', PORT: '3000' },
+			url: 'http://127.0.0.1:3000/',
+			healthUrl: 'http://127.0.0.1:3000/',
+		});
+	});
+
+	test('heuristic dev config infers fixed app port from startup script wait-on target', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: "npx concurrently --kill-others 'npx nx run-many -t start -p twenty-server twenty-front' 'npx wait-on tcp:3000 && npx nx run twenty-server:worker'",
+		}), {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			fixedPort: 3000,
+		});
+	});
+
+	test('heuristic dev config does not infer fixed app port from ambiguous startup scripts', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewHeuristicDevConfig({
+			start: 'vite --port 3000 && wait-on tcp:4000',
+		}), {
+			command: 'npm run start',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+		});
 	});
 
 	test('static HTML config serves the detected directory with Python', () => {
@@ -610,6 +1128,41 @@ suite('Workbench App Preview', () => {
 		});
 	});
 
+	test('static HTML config can open a detected document path', () => {
+		const resolveStaticHtmlConfig = resolveWorkbenchAppPreviewStaticHtmlConfig as unknown as (serveDir: string, initialPath?: string) => ReturnType<typeof resolveWorkbenchAppPreviewStaticHtmlConfig>;
+
+		assert.deepStrictEqual(resolveStaticHtmlConfig('docs/architecture', 'example-architecture.html'), {
+			command: 'python3 -m http.server ${PORT} --directory docs/architecture',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/example-architecture.html',
+			healthPath: '/',
+		});
+	});
+
+	test('static HTML selection prefers architecture docs over lower-signal pages', () => {
+		assert.strictEqual(selectWorkbenchAppPreviewStaticHtmlFile([
+			'docs/architecture/repo-map.diagram.html',
+			'docs/architecture/example-composable-model.html',
+			'docs/architecture/example-architecture.html',
+			'docs/architecture/example-containment-model.html',
+		]), 'docs/architecture/example-architecture.html');
+	});
+
+	test('preview server config can start without install when it has no install commands', () => {
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall(resolveWorkbenchAppPreviewStaticHtmlConfig('public')), true);
+	});
+
+	test('preview server config cannot start without install when dependencies need setup', () => {
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall({
+			command: 'npm run dev',
+			portEnv: 'PORT',
+			url: 'http://127.0.0.1:${PORT}/',
+			healthPath: '/',
+			installCommand: 'npm install',
+		}), false);
+		assert.strictEqual(canStartWorkbenchAppPreviewServerWithoutInstall(undefined), false);
+	});
+
 	test('normalizes wildcard bind hosts to loopback preview URLs', () => {
 		assert.strictEqual(normalizeWorkbenchAppPreviewLoopbackUrl('http://[::]:10036/'), 'http://127.0.0.1:10036/');
 		assert.strictEqual(normalizeWorkbenchAppPreviewLoopbackUrl('http://0.0.0.0:5173/path?x=1#top'), 'http://127.0.0.1:5173/path?x=1#top');
@@ -619,6 +1172,7 @@ suite('Workbench App Preview', () => {
 	test('uses no-cors health checks for loopback preview URLs', () => {
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('http://127.0.0.1:10036/'), 'no-cors');
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('http://localhost:5173/'), 'no-cors');
+		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('https://local.preview.example.test:3007/'), 'no-cors');
 		assert.strictEqual(getWorkbenchAppPreviewHealthFetchMode('https://example.com/'), 'cors');
 	});
 
@@ -636,6 +1190,28 @@ suite('Workbench App Preview', () => {
 		);
 	});
 
+	test('does not inject assigned ports into external preview URLs', () => {
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://external-shell.example.test:443/app/projects?remote=https://local.preview.example.test:3001/assets.js', 4821),
+			'https://external-shell.example.test/app/projects?remote=https://local.preview.example.test:3001/assets.js'
+		);
+	});
+
+	test('adapts only the managed local server origin when one is provided', () => {
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://external-shell.example.test:443/app/projects?remote=https://local.preview.example.test:3001/assets.js', 4821, {
+				managedServerOrigin: 'https://local.preview.example.test:3001'
+			}),
+			'https://external-shell.example.test/app/projects?remote=https://local.preview.example.test:3001/assets.js'
+		);
+		assert.strictEqual(
+			adaptWorkbenchAppPreviewUrlToPort('https://local.preview.example.test:3001/app/projects?tab=overview#details', 4821, {
+				managedServerOrigin: 'https://local.preview.example.test:3001'
+			}),
+			'https://local.preview.example.test:4821/app/projects?tab=overview#details'
+		);
+	});
+
 	test('detects preview URL templates that still require a port assignment', () => {
 		assert.strictEqual(hasWorkbenchAppPreviewPortTemplate('http://127.0.0.1:${PORT}/'), true);
 		assert.strictEqual(hasWorkbenchAppPreviewPortTemplate('file:///tmp/index.html'), false);
@@ -646,6 +1222,24 @@ suite('Workbench App Preview', () => {
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Error: listen EADDRINUSE: address already in use 127.0.0.1:4821', 4821), true);
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Error: listen EADDRINUSE: address already in use 127.0.0.1:5173', 4821), false);
 		assert.strictEqual(isWorkbenchAppPreviewPortConflict('Compiled successfully on port 4821', 4821), false);
+	});
+
+	test('detects whether a process cwd belongs to the repo root', () => {
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app/apps/demo', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app/', '/Users/dev/repos/example-app'), true);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/other-project', '/Users/dev/repos/example-app'), false);
+		assert.strictEqual(isWorkbenchAppPreviewPathUnderRoot('/Users/dev/repos/example-app-other', '/Users/dev/repos/example-app'), false);
+	});
+
+	test('classifies terminal startup failures', () => {
+		assert.deepStrictEqual([
+			classifyWorkbenchAppPreviewTerminalFailure('Error: listen EADDRINUSE: address already in use 127.0.0.1:4821', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('zsh: command not found: yarn', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('Error: Cannot find module vite', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('sh: ./node_modules/.bin/vite: Permission denied', 4821),
+			classifyWorkbenchAppPreviewTerminalFailure('ready in 1.2s', 4821),
+		], ['portConflict', 'missingBinary', 'moduleNotFound', 'permissionDenied', 'unknown']);
 	});
 
 	test('health failures do not restart a live preview server process', () => {
@@ -666,5 +1260,181 @@ suite('Workbench App Preview', () => {
 			backgroundRestartAttempts: 0,
 			maxBackgroundRestartAttempts: 3,
 		}), true);
+	});
+
+	test('load events are ignored while still loading', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: true,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load events with no error are ignored', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: false,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while the loud startup sequence is in progress', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: true,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while a previous recovery attempt is still in flight', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: true,
+			serverStartInFlight: false,
+		}), true);
+	});
+
+	test('load errors are ignored while a quiet (background) server start is in flight', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: true,
+		}), true);
+	});
+
+	test('a genuine, isolated load error is not ignored', () => {
+		assert.strictEqual(shouldIgnoreWorkbenchAppPreviewLoadEvent({
+			eventLoading: false,
+			hasError: true,
+			previewStartupInProgress: false,
+			previewLoadFailureRecoveryInFlight: false,
+			serverStartInFlight: false,
+		}), false);
+	});
+
+	test('startup local connection errors keep the startup page over the load error overlay', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: true,
+			errorUrl: 'http://127.0.0.1:3001/',
+			errorCode: -102,
+		}), false);
+		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: true,
+			errorUrl: 'https://local.preview.example.test:3001/',
+			errorCode: -102,
+		}), false);
+	});
+
+	test('startup load error overlay still shows for non-local or steady-state errors', () => {
+		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: true,
+			errorUrl: 'https://example.com/',
+			errorCode: -102,
+		}), true);
+		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: true,
+			errorUrl: 'http://127.0.0.1:3001/',
+			errorCode: -202,
+		}), true);
+		assert.strictEqual(shouldShowWorkbenchAppPreviewLoadErrorOverlay({
+			previewStartupInProgress: false,
+			errorUrl: 'http://127.0.0.1:3001/',
+			errorCode: -102,
+		}), true);
+	});
+
+	test('discovered port reconciliation updates url, health url, and port when the server bound elsewhere', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), {
+			port: 3002,
+			url: 'http://127.0.0.1:3002/',
+			healthUrl: 'http://127.0.0.1:3002/health',
+		});
+	});
+
+	test('discovered port reconciliation treats localhost and 127.0.0.1 as the same host', () => {
+		assert.deepStrictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3000/',
+			serverHealthUrl: 'http://127.0.0.1:3000/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://localhost:3001/',
+			discoveredBranchName: 'feature/foo',
+		}), {
+			port: 3001,
+			url: 'http://127.0.0.1:3001/',
+			healthUrl: 'http://127.0.0.1:3001/health',
+		});
+	});
+
+	test('discovered port reconciliation does nothing when the port already matches', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3001/some/deep/path',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the discovery is for a different branch', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/bar',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the repo has a fixed port configured', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: 3001,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when the discovered host differs', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: 'http://127.0.0.1:3001/',
+			serverHealthUrl: 'http://127.0.0.1:3001/health',
+			serverBranch: 'feature/foo',
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://example.test:3002/',
+			discoveredBranchName: 'feature/foo',
+		}), undefined);
+	});
+
+	test('discovered port reconciliation does nothing when there is no current server url yet', () => {
+		assert.strictEqual(resolveWorkbenchAppPreviewDiscoveredPortReconciliation({
+			serverUrl: undefined,
+			serverHealthUrl: undefined,
+			serverBranch: undefined,
+			serverFixedPort: undefined,
+			discoveredUrl: 'http://127.0.0.1:3002/',
+			discoveredBranchName: undefined,
+		}), undefined);
 	});
 });

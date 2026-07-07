@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../base/test/common/utils.js';
-import { BrowserViewKind, getBrowserViewAuthNavigationAction, getBrowserViewExternalLinkAction, getBrowserViewKindForInitialState, isBrowserViewLocalHttpUrl, shouldOpenBrowserViewTargetInternally } from '../../common/browserView.js';
+import { BrowserViewKind, getBrowserViewAuthNavigationAction, getBrowserViewAuthWindowOpenAction, getBrowserViewExternalLinkAction, getBrowserViewKindForInitialState, isBrowserViewLocalHttpUrl, shouldOpenBrowserViewTargetInternally } from '../../common/browserView.js';
 
 suite('BrowserView Auth Flow', () => {
 
@@ -72,6 +72,33 @@ suite('BrowserView Auth Flow', () => {
 			targetUrl: 'https://local.example.test/callback?code=123',
 			inAuthWindow: true,
 		}), 'returnToPreview');
+	});
+
+	test('keeps auth window redirects in the same internal tab', () => {
+		assert.strictEqual(getBrowserViewAuthNavigationAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'https://login.example.com/oauth',
+			targetUrl: 'https://sts.example.com/saml',
+			inAuthWindow: true,
+		}), 'allow');
+	});
+
+	test('keeps auth window popups in the same internal tab', () => {
+		assert.strictEqual(getBrowserViewAuthWindowOpenAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'https://login.example.com/oauth',
+			targetUrl: 'https://sts.example.com/saml',
+			inAuthWindow: true,
+		}), 'reuseAuthWindow');
+	});
+
+	test('reuses the active auth tab for repeated App Preview auth popups', () => {
+		assert.strictEqual(getBrowserViewAuthWindowOpenAction({
+			kind: BrowserViewKind.AppPreview,
+			currentUrl: 'http://127.0.0.1:3000/',
+			targetUrl: 'https://login.example.com/oauth',
+			hasActiveAuthWindow: true,
+		}), 'reuseAuthWindow');
 	});
 
 	test('does not intercept non-web protocols', () => {

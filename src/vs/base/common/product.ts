@@ -83,6 +83,11 @@ export interface IAgentSdkProductConfig {
 	readonly urlTemplate: string;
 }
 
+export interface IAlphaUpdateProductConfiguration {
+	readonly enabled?: boolean;
+	readonly feedUrl?: string;
+}
+
 export interface IProductConfiguration {
 	readonly version: string;
 	readonly date?: string;
@@ -113,6 +118,7 @@ export interface IProductConfiguration {
 
 	readonly downloadUrl?: string;
 	readonly updateUrl?: string;
+	readonly alphaUpdate?: IAlphaUpdateProductConfiguration;
 	readonly webUrl?: string;
 	readonly webEndpointUrlTemplate?: string;
 	readonly webviewContentExternalBaseUrlTemplate?: string;

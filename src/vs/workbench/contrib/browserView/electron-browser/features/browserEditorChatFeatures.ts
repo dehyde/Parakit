@@ -26,7 +26,7 @@ import { IChatWidget, IChatWidgetService } from '../../../chat/browser/chat.js';
 import { IChatService } from '../../../chat/common/chatService/chatService.js';
 import { IChatRequestVariableEntry } from '../../../chat/common/attachments/chatVariableEntries.js';
 import { ChatContextKeys } from '../../../chat/common/actions/chatContextKeys.js';
-import { IElementData, IElementAncestor, BrowserViewCommandId } from '../../../../../platform/browserView/common/browserView.js';
+import { IElementData, IElementAncestor, BrowserViewCommandId, IBrowserViewInspectorPanelPayload } from '../../../../../platform/browserView/common/browserView.js';
 import { IBrowserViewModel, BrowserViewSharingState } from '../../../browserView/common/browserView.js';
 import { getBrowserShareControlPresentation } from '../../common/browserShareControlPresentation.js';
 import { BrowserEditorInput } from '../../common/browserEditorInput.js';
@@ -213,8 +213,11 @@ export class BrowserEditorChatIntegration extends BrowserEditorContribution {
 			}
 		}));
 		store.add(this.browserDesignElementService.onDidChangeInspectionActive(active => {
-			if (!active && model.isElementSelectionActive) {
-				void model.toggleElementSelection(false);
+			if (!active) {
+				void model.hideElementInspectorPanel();
+				if (model.isElementSelectionActive) {
+					void model.toggleElementSelection(false);
+				}
 			}
 		}));
 
@@ -357,7 +360,21 @@ export class BrowserEditorChatIntegration extends BrowserEditorContribution {
 	// -- Element Selection ----------------------------------------------
 
 	private async _inspectElementData(elementData: IElementData, model: IBrowserViewModel) {
-		await this.browserDesignElementService.inspectElement(elementData);
+		const { selection, propertyGroups } = await this.browserDesignElementService.inspectElement(elementData);
+		const payload: IBrowserViewInspectorPanelPayload = {
+			componentName: selection.displayName,
+			bounds: selection.bounds,
+			groups: propertyGroups.map(group => ({
+				id: group.id,
+				label: group.label,
+				properties: group.properties.map(property => ({
+					name: property.name,
+					value: property.value,
+					token: property.token
+				}))
+			}))
+		};
+		await model.showElementInspectorPanel(payload);
 		this._setElementSelectionWarningVisible(false);
 		this._hideElementSelectionWarningScheduler.schedule();
 

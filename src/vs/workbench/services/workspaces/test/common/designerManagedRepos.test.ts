@@ -5,7 +5,7 @@
 
 import assert from 'assert';
 import { URI } from '../../../../../base/common/uri.js';
-import { getDesignerManagedRepoForFolder, getDesignerManagedReposManifestResource, getDesignerStateResource, parseDesignerManagedReposManifest, parseDesignerState, updateDesignerLastActiveRepo, upsertDesignerManagedRepo } from '../../common/designerManagedRepos.js';
+import { clearDesignerStartupRestorePending, getDesignerManagedRepoForFolder, getDesignerManagedReposManifestResource, getDesignerStateResource, markDesignerStartupRestorePending, parseDesignerManagedReposManifest, parseDesignerState, updateDesignerLastActiveRepo, upsertDesignerManagedRepo } from '../../common/designerManagedRepos.js';
 
 suite('Designer Managed Repos Manifest', () => {
 	test('missing or invalid manifest is ignored safely', () => {
@@ -72,6 +72,34 @@ suite('Designer Managed Repos Manifest', () => {
 		const state = updateDesignerLastActiveRepo(parseDesignerState(undefined), '/Users/test/Documents/Designer Repos/app');
 
 		assert.deepStrictEqual(state, { version: 1, lastActiveRepoPath: '/Users/test/Documents/Designer Repos/app' });
+	});
+
+	test('designer state stores the last active branch name', () => {
+		const state = updateDesignerLastActiveRepo(parseDesignerState(undefined), '/Users/test/Documents/Designer Repos/app', 'feature/design');
+
+		assert.deepStrictEqual(state, {
+			version: 1,
+			lastActiveRepoPath: '/Users/test/Documents/Designer Repos/app',
+			lastActiveBranchName: 'feature/design'
+		});
+		assert.deepStrictEqual(parseDesignerState(JSON.stringify(state)), state);
+	});
+
+	test('designer state marks and clears pending startup restore', () => {
+		const state = updateDesignerLastActiveRepo(parseDesignerState(undefined), '/Users/test/Documents/Designer Repos/app', 'feature/design');
+		const pending = markDesignerStartupRestorePending(state, 100);
+
+		assert.deepStrictEqual(pending, {
+			version: 1,
+			lastActiveRepoPath: '/Users/test/Documents/Designer Repos/app',
+			lastActiveBranchName: 'feature/design',
+			pendingStartupRestore: {
+				repoPath: '/Users/test/Documents/Designer Repos/app',
+				branchName: 'feature/design',
+				createdAt: 100
+			}
+		});
+		assert.deepStrictEqual(clearDesignerStartupRestorePending(pending), state);
 	});
 
 	test('invalid designer state is ignored safely', () => {
